@@ -333,7 +333,7 @@ Returns boolean depending on whether display is on or off.
 
 Usage:
 
-`curl -X GET http://localhost:8080/is_display_on`
+`curl -X GET http://localhost:<REST_PORT>/is_display_on`
 
 ### display_on {"timeout": "\<timeout>"}
 
@@ -345,7 +345,7 @@ Usage:
 
 ```
 curl -X POST http://localhost:<REST_PORT>/display_on
-curl -X POST http://localhost:8080/display_on -H "Content-Type: application/json" -d '{"timeout": <timeout>}'
+curl -X POST http://localhost:<REST_PORT>/display_on -H "Content-Type: application/json" -d '{"timeout": <timeout>}'
 ```
 
 ### display_off
@@ -426,8 +426,8 @@ Screenshots are saved to `/media/screenshots`.
 Usage:
 
 ```
-curl -X POST http://localhost:8080/screenshot
-curl -X POST http://localhost:8080/screenshot -H "Content-Type: application/json"
+curl -X POST http://localhost:<REST_PORT>/screenshot
+curl -X POST http://localhost:<REST_PORT>/screenshot -H "Content-Type: application/json"
      -d '{"filename": "<filename>", "quality": <1-100>, "delay: <seconds>}'
 ```
 
@@ -435,7 +435,7 @@ curl -X POST http://localhost:8080/screenshot -H "Content-Type: application/json
 
 Return number of currently running concurrent processes out of max allowed.
 
-Usage: `curl -X GET http://localhost:8080/current_processes`
+Usage: `curl -X GET http://localhost:<REST_PORT>/current_processes`
 
 ### disable_inputs
 
@@ -472,7 +472,7 @@ Usage:
 
 ```
 curl -X POST http://localhost:<REST_PORT>/unmute_audio
-curl -X POST http://localhost:8080/unmute_audio -H "Content-Type: application/json" -d '{"volume": <volume>}'
+curl -X POST http://localhost:<REST_PORT>/unmute_audio -H "Content-Type: application/json" -d '{"volume": <volume>}'
 ```
 
 ### toggle_audio

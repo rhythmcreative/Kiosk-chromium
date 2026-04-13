@@ -6,7 +6,7 @@
 # Date: April 2026
 ################################################################################
 
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 FROM $BUILD_FROM
 
 ARG BUILD_VERSION
@@ -51,7 +51,8 @@ RUN apk update && apk add --no-cache \
 ### Full Timezone info
      icu-data-full \
 ### Python libraries
-    py3-pip \
+#    py3-pip \
+    py3-aiohttp \
     py3-xlib \
 ### Sound
      pulseaudio-utils \
@@ -81,7 +82,6 @@ RUN chmod a+x /run.sh
 
 COPY mouse_touch_inputs.py gesture_commands.json /
 COPY rest_server.py /
-RUN pip install --no-cache-dir  --break-system-packages aiohttp #Required for rest_server.py
 
 #### Patches
 # Need to patch 'unique_instance.lua' so that new instance urls overwrite active url rather than add new tab
