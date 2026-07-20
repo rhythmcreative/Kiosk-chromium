@@ -1,14 +1,20 @@
-# HAOS-kiosk
+# Kiosk-chromium
 
-Display HA dashboards in kiosk mode directly on your HAOS server.
+Display HA dashboards in kiosk mode directly on your HAOS server, using a
+regular Chromium browser.
 
-## Author: Jeff Kosowsky (version: 1.3.2, April 2026)
+## Maintainer: rhythmcreative (version: 1.4.0, July 2026)
+
+Fork of [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff
+Kosowsky, adapted to drive a stock Chromium browser (via the Chrome
+DevTools Protocol) instead of Luakit. See the
+[CHANGELOG](haoskiosk/CHANGELOG.md) for details.
 
 ## Description
 
 Launches X-Windows on local HAOS server followed by OpenBox window manager
-and Luakit browser starting with your configured default Home Assistant
-dashboard.
+and Chromium browser (in kiosk mode) starting with your configured default
+Home Assistant dashboard.
 
 - Standard mouse, touchscreen, and keyboard interactions should work
   automatically as well as audio
@@ -34,11 +40,11 @@ touchpad so long as its `/dev/input/eventN` number is less than 25.
 
 **NOTE:** If you encounter issues with the Add-on, please first check the
 HAOSKiosk github
-[issues page](https://github.com/puterboy/HAOS-kiosk/issues) (open and
+[issues page](https://github.com/rhythmcreative/Kiosk-chromium/issues) (open and
 closed), then try the testing branch (add the following url to the
-repository: https://github.com/puterboy/HAOS-kiosk#testing). If still
+repository: https://github.com/rhythmcreative/Kiosk-chromium#testing). If still
 please file an
-[issue on github](https://github.com/puterboy/HAOS-kiosk/issues) and
+[issue on github](https://github.com/rhythmcreative/Kiosk-chromium/issues) and
 \*\*include full details of your setup (including computer hardware and
 display type details)and what you did along with a complete log.
 
@@ -56,13 +62,13 @@ ______________________________________________________________________
 
 1. Click the **ADD ADD-ON REPOSITORY** button below.
 
-   [![Open your Home Assistant instance and show the add Add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fputerboy%2FHAOS-kiosk)
+   [![Open your Home Assistant instance and show the add Add-on repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Frhythmcreative%2FKiosk-chromium)
 
    - Click **Add → Close** (You might need to enter the **internal IP
      address** of your Home Assistant instance first) *or* go to the
      **Add-on store**.
    - Click **⋮ → Repositories**
-   - Fill in `https://github.com/puterboy/HAOS-kiosk`
+   - Fill in `https://github.com/rhythmcreative/Kiosk-chromium`
    - Click **Add → Close**
 
 2. Click on the Add-on, press **Install** and wait until the Add-on is
@@ -76,7 +82,7 @@ ______________________________________________________________________
 **If you are having trouble installing the add-on or getting displays and
 touchscreens working, please see the **TROUBLESHOOTING** section below as
 well as the github issues page
-(https://github.com/puterboy/HAOS-kiosk/issues) as many common issues have
+(https://github.com/rhythmcreative/Kiosk-chromium/issues) as many common issues have
 already been addressed and resolved**
 
 ______________________________________________________________________
@@ -297,10 +303,11 @@ your network.
 
 ### Debug
 
-For debugging purposes, launches `Xorg` and `openbox` and then sleeps
-without launching `luakit`.\
-Manually, launch `luakit` (e.g.,
-`luakit -U localhost:8123/<your-dashboard>`) from Docker container.\
+For debugging purposes, launches `Xorg`, `openbox` and the REST API server,
+then sleeps without launching `chromium`.\
+Manually, launch Chromium (e.g.,
+`chromium --kiosk --app=http://localhost:8123/<your-dashboard> --no-sandbox --user-data-dir=/root/.config/chromium-kiosk --remote-debugging-port=9222`)
+from the Docker container.\
 E.g., `sudo docker exec -it addon_haoskiosk bash`
 
 ______________________________________________________________________
@@ -695,8 +702,8 @@ actions:
 
      See 'examples' folder for simple Bash script example screensaver.
 
-2. Use custom command(s) to change internal parameters of HAOSKiosk and the
-   luakit browser configuration.
+2. Use custom command(s) to change internal parameters of HAOSKiosk (e.g., via
+   `xset`, `dbus-send`, or the REST API's own control endpoints).
 
 ______________________________________________________________________
 
@@ -916,67 +923,54 @@ implemented the above as:
 
 "3_TOUCH_1_SWIPE_RIGHT": {"cmds": [["xdotool", "key", "--clearmodifiers", "ctrl+Left"]], "msg": "Go back in the history browser"}
 
-"2_TOUCH_3_TAP": {"cmds": "luakit \"$HA_URL/$HA_DASHBOARD\"", "msg": "Restore default dashboard"}
+"2_TOUCH_3_TAP": {"cmds": "kiosk.launch_url", "msg": "Restore default dashboard: HA_URL/HA_DASHBOARD"}
 
-"2_TOUCH_4_TAP": {"cmds": "luakit \"www.google.com\"", "msg": "Open Google search"}'
+"2_TOUCH_4_TAP": {"cmds": [["kiosk.launch_url", "www.google.com"]], "msg": "Open Google search"}'
 ```
+
+Note: unlike the old Luakit browser, navigation is driven internally over the Chrome
+DevTools Protocol rather than by spawning a browser process from a shell command, so
+`kiosk.launch_url` (rather than a raw shell command) is the only way to send the kiosk
+to a new URL.
 
 ______________________________________________________________________
 
 ## KEYBOARD SHORTCUTS
 
-The following new fixed keyboard shortcuts are defined (but subject to
-change).
+Chromium is a regular browser, so its own standard keyboard shortcuts apply
+directly to the kiosk page (e.g., **Ctrl+r** to reload, **Ctrl+Left**/**Ctrl+Right**
+to go back/forward in history). Since Chromium is launched in `--kiosk --app`
+mode (no address bar, no tab strip), there's no separate tab or window UI to
+navigate between.
 
-- **Ctrl+o:** *Toggle Onboard onscreen keyboard*
+On top of that, Openbox (the window manager) defines the following fixed
+bindings:
 
-- **Ctrl+r:** *Reload page*
-
-- **Ctrl+Left:** *Go back in the browser tab history*
-
-- **Ctrl+Right:** *Go forward in the browser tab history*
-
-- **Ctrl+Alt+t:** *Open new tab*
-
-- **Ctrl+Alt+Shift+t:** *Close current tab*
-
-- **Ctrl+Alt+w:** *Open new window*
-
-- **Ctrl+Alt+Shift+w:** *Close current window* (except for last window)
-
-- **Ctl+Alt+Left:** *Previous tab*
-
-- **Ctl+Alt+Right:** *Next tab*
-
-- **Ctl+Alt+Shift+Left:** *Previous window* (Also: **Alt+Shift+Tab**)
-
-- **Ctl+Alt+Shift+Right:** *Next window* (Also: **Alt+Tab**)
+- **Ctrl+Alt+o:** *Toggle Onboard onscreen keyboard*
 
 - **Ctrl+Alt+k:** *Take screenshot and save to /media/screenshots*
 
-Note that the Onbox Window manager defines many other default bindings.
+- **Ctrl+Alt+Shift+Left:** *Previous window* (Also: **Alt+Shift+Tab**)
+
+- **Ctrl+Alt+Shift+Right:** *Next window* (Also: **Alt+Tab**)
+
+Note that the Openbox window manager defines many other default bindings.
 
 ______________________________________________________________________
 
 ## MISCELLANEOUS NOTES
 
-#### Luakit browser
+#### Chromium browser
 
-The Luakit browser is launched in kiosk-like (*passthrough*) mode. In
-general, you want to stay in `passthrough` mode to preserve the kiosk-like
-experience and pass all keystrokes to the browser page (except for explicit
-bindings as defined above)
+Chromium is launched in kiosk mode (`--kiosk --app=<url>`), so it behaves
+like a normal browser page with no address bar, tabs, or window chrome — all
+keystrokes and touches simply reach the page, with no Luakit-style modal
+`passthrough`/`normal` mode switching needed.
 
-Luakit modes and commands are similar to vi
-
-- To enter *normal* mode (similar to command mode in `vi`), press
-  `ctl-alt-esc`.
-
-- To return to *passthrough* mode, press `ctl-Z` or alternatively, press
-  `i` to enter *insert*
-
-See [luakit documentation](https://wiki.archlinux.org/title/Luakit) for
-further usage information and available commands.
+Auto-login, HA sidebar/theme settings, periodic refresh, and crash recovery
+(previously implemented via Luakit's in-process Lua scripting in
+`userconf.lua`) are now driven externally by `chromium_kiosk.py` over the
+Chrome DevTools Protocol.
 
 ______________________________________________________________________
 

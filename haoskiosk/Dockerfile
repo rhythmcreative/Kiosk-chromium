@@ -1,9 +1,9 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: Dockerfile
-# Version: 1.3.1
+# Version: 1.4.0
 # Copyright Jeff Kosowsky
-# Date: April 2026
+# Date: July 2026
 ################################################################################
 
 ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
@@ -46,7 +46,6 @@ RUN apk update && apk add --no-cache \
 ### Linux utils
      bash \
      util-linux \
-     patch \
      scrot \
 ### Full Timezone info
      icu-data-full \
@@ -62,9 +61,11 @@ RUN apk update && apk add --no-cache \
 #     gst-libav \
 ### VNC (for debugging) - run: x11vnc -display :0 -forever & \
       x11vnc \
-# Browser
-#    luakit \
-   && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/community luakit=2.3.6-r0 \
+# Browser (regular Chromium, driven externally via the Chrome DevTools Protocol -
+# see chromium_kiosk.py - rather than Luakit's in-process Lua scripting)
+   && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/community \
+        chromium \
+        chromium-swiftshader \
    && rm -rf /var/cache/apk/*
 
 #===============================================================================
@@ -72,20 +73,14 @@ RUN apk update && apk add --no-cache \
 ##### Set the display variable
 ENV DISPLAY=:0
 
-##### Copy over 'xorg.conf.default' and lua 'userconf.lua' file
+##### Copy over 'xorg.conf.default'
 COPY xorg.conf.default /etc/X11/
-COPY userconf.lua /root/.config/luakit/
 COPY translations/*.yaml /translations/
 
 COPY run.sh /
 RUN chmod a+x /run.sh
 
 COPY mouse_touch_inputs.py gesture_commands.json /
-COPY rest_server.py /
-
-#### Patches
-# Need to patch 'unique_instance.lua' so that new instance urls overwrite active url rather than add new tab
-COPY unique_instance.patch /usr/share/luakit/lib
-RUN patch -p2 /usr/share/luakit/lib/unique_instance.lua < /usr/share/luakit/lib/unique_instance.patch
+COPY rest_server.py cdp_client.py chromium_kiosk.py /
 
 CMD ["/run.sh"]

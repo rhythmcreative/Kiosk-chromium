@@ -3,9 +3,9 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.3.2
+# Version: 1.4.0
 # Copyright Jeff Kosowsky
-# Date: April 2026
+# Date: July 2026
 #
 #  Code does the following:
 #     - Import and sanity-check the following variables from HA/config.yaml
@@ -51,8 +51,8 @@
 #     - Set up onscreen keyboard per configuration
 #     - Set audio sink
 #     - Start Xinput parsing...
-#     - Start REST API server
-#     - Launch browser for url: $HA_URL/$HA_DASHBOARD
+#     - Start REST API server, which also launches (and drives via the Chrome
+#       DevTools Protocol) Chromium in kiosk mode for url: $HA_URL/$HA_DASHBOARD
 #       [If not in DEBUG_MODE; Otherwise, just sleep]
 #
 ################################################################################
@@ -75,15 +75,17 @@ cleanup() {
     fi
     jobs -p | xargs -r kill
     [ -n "$TTY0_DELETED" ] && mknod -m 620 /dev/tty0 c 4 0
-    rm -f /root/.local/share/luakit/cookies.db  # Remove cookie storage (not really necessary, but just in case...)
+    # Chromium's profile dir is normally wiped by chromium_kiosk.py's own SIGTERM handler
+    # (which also kills the Chromium process, a grandchild not reachable via 'jobs -p');
+    # this is just a defensive fallback in case that shutdown path didn't run.
+    rm -rf /root/.config/chromium-kiosk
     exit "$exit_code"
 }
 trap cleanup HUP INT QUIT ABRT TERM EXIT
 
 ################################################################################
 #### Variables
-BROWSER="luakit"
-BROWSER_FLAGS=
+BROWSER="chromium"  # Launched by rest_server.py (via chromium_kiosk.py), not directly by this script
 
 ################################################################################
 #### Get config variables from HA add-on & set environment variables
@@ -167,11 +169,8 @@ export DBUS_SESSION_BUS_TIMEOUT=5000  # Shorten DBUS timeouts
 export GTK_CSD=0                      # Disable client side decorations (???)
 ################################################################################
 #### Start Dbus
-# Start dbus-daemon to Avoids waiting for DBUS timeouts (e.g., luakit)
-# Also needed by luakit to enforce unique instance by default
-# Note do *not* use '-U' flag when calling luakit browser
-# Subsequent calls to 'luakit' exit post launch, leaving just the original process
-# Not 'userconf.lua' includes code to turn off session restore.
+# Start dbus-daemon to avoid waiting for DBUS timeouts and to support the
+# Onboard onscreen keyboard's dbus-send-based toggle/hide IPC.
 # Export and save DBUS_SESSION_BUS_ADDRESS variable so that processes can communicate.
 # Note if entering through a separate shell, need to retrieve and export again
 
@@ -664,12 +663,8 @@ if [ -n "$VNC_SERVER" ]; then
     x11vnc $X11VNC_OPTS 2> >(grep -v 'The VNC desktop is:' >&2)
 fi
 
-#### Start browser (or debug mode)  and wait/sleep
+#### Wait for the $BROWSER process (launched by rest_server.py) to exit, or sleep in debug mode
 if [ "$DEBUG_MODE" != true ]; then
-    ### Run browser in the background and wait for process to exit
-    $BROWSER ${BROWSER_FLAGS:+$BROWSER_FLAGS} "$HA_URL/$HA_DASHBOARD" &
-    bashio::log.info "Launching $BROWSER browser(PID=$!): $HA_URL/$HA_DASHBOARD"
-
     count=0
     while true; do  # Wait for all browser processes to exit
         if pgrep -f -- "^$BROWSER " > /dev/null 2>&1; then

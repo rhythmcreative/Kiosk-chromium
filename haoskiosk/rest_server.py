@@ -69,8 +69,10 @@ from functools import wraps
 from typing import Any, Awaitable, cast, Callable, Final, Literal, TypedDict, TypeVar
 from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import-error
 
+from chromium_kiosk import ChromiumKiosk
+
 #-------------------------------------------------------------------------------
-__version__ = "1.3.2"
+__version__ = "1.4.0"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -82,6 +84,10 @@ __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 REST_PORT: int = int(os.getenv("REST_PORT", "8080"))
 REST_IP: str = os.getenv("REST_IP", "127.0.0.1")
 REST_BEARER_TOKEN: str | None = os.getenv("REST_BEARER_TOKEN") or None  # None = no authorization required
+DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
+### The running Chromium kiosk controller (None until 'main()' starts it, or if DEBUG_MODE)
+KIOSK: ChromiumKiosk | None = None
 
 # Note setting True is a real security risk since it allows all commands and tokens
 # If just want all programs, set COMMAND_WHITELIST_REGEX to "*"
@@ -103,7 +109,7 @@ ALLOWED_PATHS = {"/bin", "/usr/bin", "/usr/local/bin"} # Executables must be in 
 ALLOWED_PATHS_STR = ":".join(ALLOWED_PATHS)
 
 ## Commands that are white-listed -- all others are blocked (Note: set to ".*" to allow all or "" to block all)
-DEFAULT_COMMAND_WHITELIST_REGEX = r"cat|date|dbus-send|echo|false|grep|head|ls|luakit|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|xdotool|xset"
+DEFAULT_COMMAND_WHITELIST_REGEX = r"cat|date|dbus-send|echo|false|grep|head|ls|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|xdotool|xset"
 COMMAND_WHITELIST_REGEX = os.getenv("COMMAND_WHITELIST", DEFAULT_COMMAND_WHITELIST_REGEX).strip()
 
 COMPILED_WHITELIST_REGEX: re.Pattern[str] | None = None
@@ -460,20 +466,24 @@ HTTP_GET_COMMANDS = {  # Commands using GET (rather than POST) method
 ### URL & Refresh
 @register_function("launch_url", optional=["url"], validators={"url": is_valid_url})
 async def handle_launch_url(data: Payload) -> dict[str, Any]:
-    """Launch browser with given URL."""
+    """Navigate the kiosk's Chromium tab to the given URL."""
     url = str(data["url"]) if data.get("url") else DEFAULT_LAUNCH_URL
     if url != "about:blank" and not url.startswith(("http://", "https://")):
         url = "http://" + url
-    asyncio.create_task(execute_command(["luakit", "-n", url], log_prefix="launch_url", allow_command=True))  # Run in the background
-    result = {"success": True, "stdout": "", "stderr": "", "returncode": 0}
-    return {"success": result["success"], "result": result}
+    if KIOSK is None:
+        logging.error("[launch_url] Chromium kiosk controller not running (DEBUG_MODE?)")
+        return {"success": False, "error": "Chromium kiosk controller not running"}
+    success = await KIOSK.navigate(url)
+    return {"success": success}
 
 @register_function("refresh_browser")
 async def handle_refresh_browser(data: Payload) -> dict[str, Any]:  # pylint: disable=unused-argument
-    """Send Ctrl+R to refresh browser."""
-    result = await execute_command( ["xdotool", "key", "--clearmodifiers", "ctrl+r"],
-                                    timeout=SHORT_TIMEOUT, log_prefix="refresh_browser", allow_command=True)
-    return {"success": result["success"]}
+    """Reload the current page."""
+    if KIOSK is None:
+        logging.error("[refresh_browser] Chromium kiosk controller not running (DEBUG_MODE?)")
+        return {"success": False, "error": "Chromium kiosk controller not running"}
+    success = await KIOSK.reload()
+    return {"success": success}
 
 ### Display
 @register_function("is_display_on")  # GET endpoint – we register manually below
@@ -924,7 +934,9 @@ async def create_app() -> web.Application:
 # Server startup
 # --------------------------------------------------------------------------- #
 async def main() -> None:
-    """Start the REST server."""
+    """Start the REST server and (unless DEBUG_MODE) the Chromium kiosk controller."""
+    global KIOSK  # pylint: disable=global-statement
+
     app = await create_app()
     logging.info("Starting HAOS Kiosk REST server on http://%s:%s", REST_IP, REST_PORT)
 
@@ -939,7 +951,28 @@ async def main() -> None:
         logging.error("Failed to bind to %s:%s → %s", REST_IP, REST_PORT, exc)
         sys.exit(1)
 
-    await asyncio.Event().wait()  # run forever
+    if DEBUG_MODE:
+        logging.info("DEBUG_MODE enabled: REST server running without launching Chromium")
+    else:
+        KIOSK = ChromiumKiosk()
+        await KIOSK.start()
+
+    # Wait for SIGTERM/SIGINT (e.g. container stop) so Chromium can be torn down cleanly
+    # rather than left as an orphaned grandchild process of run.sh.
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _request_stop(sig_name: str) -> None:
+        logging.info("Received %s, shutting down...", sig_name)
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _request_stop, sig.name)
+
+    await stop_event.wait()
+
+    if KIOSK is not None:
+        await KIOSK.stop()
 
 
 if __name__ == "__main__":

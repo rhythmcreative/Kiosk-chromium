@@ -132,5 +132,5 @@ configuration:
   debug_mode:
     name: "Debug Mode"
     description: |
-      Launch X and Openbox but not Luakit browser. [Default: False]
+      Launch X and Openbox but not the Chromium browser. [Default: False]
       Manually access using: sudo docker -exec -it addon_haoskiosk bash

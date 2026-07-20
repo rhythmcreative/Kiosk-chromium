@@ -1,11 +1,12 @@
 ---
-name: "HAOS Kiosk Display"
+name: "Kiosk Chromium Display"
 description: |
-  Start X server and browser on local HAOS server and display dashboards in
-  kiosk mode (Jeff Kosowsky)
-version: "1.3.2"
+  Start X server and Chromium browser on local HAOS server and display
+  dashboards in kiosk mode. Fork of HAOS-kiosk by Jeff Kosowsky, adapted to
+  drive regular Chromium via the Chrome DevTools Protocol instead of Luakit.
+version: "1.4.0"
 slug: "haoskiosk"
-url: https://github.com/puterboy/HAOS-kiosk/tree/main/haoskiosk
+url: https://github.com/rhythmcreative/Kiosk-chromium/tree/main/haoskiosk
 
 arch:
   - aarch64
@@ -101,7 +102,7 @@ options:
     - '"3+_TOUCH_1_SWIPE_RIGHT": {"cmds": "kiosk.back", "msg": "Go back in the history browser"}'
     - '"2_TOUCH_3_TAP": {"cmds": "kiosk.launch_url", "msg": "Restore default dashboard: HA_URL/HA_DASHBOARD"}'
     - '"2_TOUCH_4_TAP": {"cmds": [["kiosk.launch_url", "www.google.com"]], "msg": "Open Google search"}'
-  command_whitelist: "cat|date|dbus-send|echo|false|grep|head|ls|luakit|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|true|xdotool|xset"
+  command_whitelist: "cat|date|dbus-send|echo|false|grep|head|ls|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|true|xdotool|xset"
   vnc_server: ""
   debug_mode: false
 

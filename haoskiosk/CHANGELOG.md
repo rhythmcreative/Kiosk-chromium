@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.4.0 - July 2026
+
+- **Replaced Luakit with regular Chromium** as the kiosk browser
+  - Chromium is launched with `--kiosk --app=<url>` plus a set of standard
+    container-safe flags (`--no-sandbox`, `--disable-dev-shm-usage`, etc.)
+  - Since Chromium has no in-process scripting hook (unlike Luakit's Lua API),
+    all former `userconf.lua` behavior is now driven externally over the Chrome
+    DevTools Protocol (CDP) by a new `chromium_kiosk.py` controller run inside
+    `rest_server.py`: auto-login, HA sidebar/theme localStorage settings,
+    unhandled-rejection suppression, HA websocket-recovery watchdog, periodic
+    browser refresh, and restart-after-repeated-load-failures
+  - Dark/light mode is applied via CDP `Emulation.setEmulatedMedia` (sets the
+    `prefers-color-scheme` media query only, unlike Chromium's `--force-dark-mode`
+    flag which would also recolor the page)
+  - Zoom level is applied via `--force-device-scale-factor` at launch
+  - Chromium automatically falls back from hardware (EGL) to software
+    (SwiftShader) GL rendering if it fails to start with hardware acceleration
+  - `launch_url` (REST API and gesture commands) now navigates the existing
+    kiosk tab via CDP instead of spawning a second browser process, so the
+    `unique_instance.lua` patch is no longer needed
+  - Removed `userconf.lua` and `unique_instance.patch`; removed `luakit` from
+    the default `command_whitelist`
+  - Added `cdp_client.py` (shared CDP helper) and `chromium_kiosk.py` (the
+    Chromium kiosk controller)
+
 ## v1.3.2 - April 2026
 
 - Added explicit BUILD_FROM location to Dockerfile for ha core 2026.04+

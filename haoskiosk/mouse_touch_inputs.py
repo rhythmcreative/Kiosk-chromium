@@ -368,6 +368,7 @@ from functools import wraps
 from typing import Any, cast, Callable, ClassVar, Final, Iterator, NotRequired, Protocol, Self, Sequence, Type, TypeAlias, TypedDict, TypeVar
 from Xlib import display                  #type: ignore[import-untyped] #pylint: disable=import-error
 from Xlib.xobject.drawable import Window  #type: ignore[import-untyped] #pylint: disable=import-error
+from cdp_client import cdp_navigate_sync
 #-------------------------------------------------------------------------------
 __version__ = "1.3.2"
 __author__ = "Jeff Kosowsky"
@@ -467,7 +468,7 @@ ALLOWED_PATHS = {"/bin", "/usr/bin", "/usr/local/bin"} # Executables must be in 
 ALLOWED_PATHS_STR = ":".join(ALLOWED_PATHS)
 
 ## Commands that are white-listed -- all others are blocked (Note: set to ".*" to allow all or "" to block all)
-DEFAULT_COMMAND_WHITELIST_REGEX = r"cat|date|dbus-send|echo|false|grep|head|ls|luakit|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|xdotool|xset"
+DEFAULT_COMMAND_WHITELIST_REGEX = r"cat|date|dbus-send|echo|false|grep|head|ls|notify-send|ping|ping6|ps|pstree|sleep|tail|test|top|tree|xdotool|xset"
 COMMAND_WHITELIST_REGEX = os.getenv("COMMAND_WHITELIST", DEFAULT_COMMAND_WHITELIST_REGEX).strip()
 
 COMPILED_WHITELIST_REGEX: re.Pattern[str] | None = None
@@ -651,8 +652,8 @@ def handle_refresh_browser(timeout: int | None = None, *, _cmd_name: str = "unkn
     _run_subprocess(cmd, timeout=timeout, description=_cmd_name)
 
 @register_function("launch_url", optional=["url"])
-def handle_launch_url(url: str = DEFAULT_LAUNCH_URL, timeout: int | None = None, *, _cmd_name: str = "unknown") -> None:
-    """Launch (valid) URL if given otherwise HA_URL/HA_DASHBOARD if exists otherwise 'about:blank'"""
+def handle_launch_url(url: str = DEFAULT_LAUNCH_URL, timeout: int | None = None, *, _cmd_name: str = "unknown") -> None:  # pylint: disable=unused-argument
+    """Navigate the kiosk's Chromium tab to (valid) URL if given, otherwise HA_URL/HA_DASHBOARD if exists otherwise 'about:blank'"""
     if not isinstance(url, str):
         raise ValueError(f"{_cmd_name}: URL must be str, got {type(url).__name__}")
     if not url.strip():
@@ -662,8 +663,10 @@ def handle_launch_url(url: str = DEFAULT_LAUNCH_URL, timeout: int | None = None,
     if url != "about:blank" and not url.startswith(("http://", "https://")):
         url = "http://" + url
 
-    cmd = ["luakit", "-n",  url]
-    _run_subprocess(cmd, timeout=timeout, description=_cmd_name)
+    # Navigate the existing kiosk tab over CDP rather than spawning a second browser instance
+    if not cdp_navigate_sync(url):
+        raise CommandError(f"Failed to navigate Chromium to {url}: {_cmd_name}")
+    debug(2, f"Execution success: {_cmd_name} -> {url}")
 
 @register_function("display_on", optional=["blank_timeout"],
                    validators=
