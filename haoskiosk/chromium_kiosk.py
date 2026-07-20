@@ -55,6 +55,8 @@ HARD_RELOAD_FREQ = 10   # Every Nth periodic refresh also bypasses cache (mirror
 MAX_LOAD_FAILURES = 5   # Consecutive main-document load failures before restarting Chromium
 CDP_READY_TIMEOUT = 20  # Seconds to wait for Chromium's CDP endpoint to come up
 GRACEFUL_STOP_TIMEOUT = 5  # Seconds to wait for SIGTERM before SIGKILL
+MAX_RESTARTS_PER_WINDOW = 5   # Give up restarting (let the container exit) after this many restarts...
+RESTART_WINDOW_SECONDS = 180  # ...within this many seconds - avoids a tight crash-restart loop
 
 
 def _single_quote_escape(s: str) -> str:
@@ -135,7 +137,11 @@ class ChromiumKiosk:
         self._refresh_deadline = 0.0
         self._hard_reload_count = 0
         self._refresh_task: asyncio.Task[None] | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
         self._restart_lock = asyncio.Lock()
+        self._restart_timestamps: list[float] = []
+        self._force_software_gl = False  # Set once hardware GL is observed to crash post-startup
+        self._active_gl_mode: str | None = None
         self._stopping = False
 
     # ------------------------------------------------------------------ #
@@ -145,6 +151,7 @@ class ChromiumKiosk:
         """Launch Chromium and establish the CDP control session."""
         await self._launch_process()
         await self._connect_cdp()
+        self._watchdog_task = asyncio.create_task(self._watch_process_exit(self.proc))
         logger.info("ChromiumKiosk started: %s", self._current_url)
 
         if self.browser_refresh > 0:
@@ -156,6 +163,8 @@ class ChromiumKiosk:
         self._stopping = True
         if self._refresh_task:
             self._refresh_task.cancel()
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
         if self.conn:
             with suppress(Exception):
                 await self.conn.close()
@@ -246,7 +255,8 @@ class ChromiumKiosk:
         return args
 
     async def _launch_process(self) -> None:
-        for gl_mode in ("hardware", "software"):
+        gl_modes = ("software",) if self._force_software_gl else ("hardware", "software")
+        for gl_mode in gl_modes:
             shutil.rmtree(PROFILE_DIR, ignore_errors=True)  # Always start from a fresh profile (no session restore)
             os.makedirs(PROFILE_DIR, exist_ok=True)
 
@@ -260,6 +270,7 @@ class ChromiumKiosk:
 
             if await self._wait_for_cdp_ready(CDP_READY_TIMEOUT):
                 logger.info("Chromium ready (%s GL, pid=%d)", gl_mode, self.proc.pid)
+                self._active_gl_mode = gl_mode
                 return
 
             logger.warning("Chromium failed to become ready with %s GL rendering", gl_mode)
@@ -297,11 +308,40 @@ class ChromiumKiosk:
             with suppress(Exception):
                 await self.proc.wait()
 
+    async def _watch_process_exit(self, watched_proc: asyncio.subprocess.Process) -> None:
+        """Detect Chromium exiting on its own (e.g. a GPU/renderer crash bringing down the whole
+        browser) - unlike CDP-level load failures, nothing else notices this, since the CDP
+        websocket just silently drops. Escalates to software GL if hardware GL just crashed."""
+        try:
+            returncode = await watched_proc.wait()
+        except asyncio.CancelledError:
+            raise
+        if self._stopping or watched_proc is not self.proc:
+            return  # Expected shutdown, or superseded by a restart that already replaced self.proc
+        logger.error("Chromium process exited unexpectedly (code=%s, gl=%s)", returncode, self._active_gl_mode)
+        if self._active_gl_mode == "hardware":
+            logger.warning("Escalating to software (SwiftShader) GL rendering after a hardware-GL crash")
+            self._force_software_gl = True
+        asyncio.create_task(self._restart_browser(f"Chromium process exited unexpectedly (code={returncode})"))
+
     async def _restart_browser(self, reason: str) -> None:
         if self._restart_lock.locked() or self._stopping:
             return
         async with self._restart_lock:
+            now = time.monotonic()
+            self._restart_timestamps = [t for t in self._restart_timestamps if now - t < RESTART_WINDOW_SECONDS]
+            if len(self._restart_timestamps) >= MAX_RESTARTS_PER_WINDOW:
+                logger.error(
+                    "GIVING UP: Chromium restarted %d times in the last %ds (%s) - not retrying again. "
+                    "run.sh will detect no browser process and exit, letting the add-on restart fresh.",
+                    len(self._restart_timestamps), RESTART_WINDOW_SECONDS, reason,
+                )
+                return
+            self._restart_timestamps.append(now)
+
             logger.error("RESTARTING Chromium (%s): %s", reason, self._current_url)
+            if self._watchdog_task:
+                self._watchdog_task.cancel()  # No-op if it already finished (e.g. it triggered this restart)
             if self.conn:
                 with suppress(Exception):
                     await self.conn.close()
@@ -311,6 +351,7 @@ class ChromiumKiosk:
             self._settings_applied = False
             await self._launch_process()
             await self._connect_cdp()
+            self._watchdog_task = asyncio.create_task(self._watch_process_exit(self.proc))
             self._reset_refresh_timer()
 
     # ------------------------------------------------------------------ #
