@@ -43,6 +43,9 @@ RUN apk update && apk add --no-cache \
      onboard \
      unclutter-xfixes \
      ttf-dejavu \
+### D-Bus (session bus + dbus-send; previously pulled in transitively by luakit,
+### needed explicitly now for Onboard's toggle/hide IPC and to avoid DBUS timeouts)
+     dbus \
 ### Linux utils
      bash \
      util-linux \
