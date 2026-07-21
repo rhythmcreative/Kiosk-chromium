@@ -4,7 +4,7 @@ description: |
   Start X server and Chromium browser on local HAOS server and display
   dashboards in kiosk mode. Fork of HAOS-kiosk by Jeff Kosowsky, adapted to
   drive regular Chromium via the Chrome DevTools Protocol instead of Luakit.
-version: "1.4.0"
+version: "1.4.1"
 slug: "haoskiosk"
 url: https://github.com/rhythmcreative/Kiosk-chromium/tree/main/haoskiosk
 
@@ -67,6 +67,14 @@ map:
 
 privileged:
   - SYS_ADMIN
+
+# Back Chromium's /tmp (which it uses for shared-memory-like files, via the
+# --disable-dev-shm-usage launch flag) with tmpfs instead of disk. Supervisor
+# add-ons can't set Docker's shm_size directly, so this is the way to give
+# Chromium fast, adequately-sized RAM-backed shared memory instead of the
+# small default and/or slow disk-backed /tmp - a common cause of renderer/GPU
+# crashes for Chromium in containers.
+tmpfs: true
 
 options:
   ha_url: "http://localhost:8123"

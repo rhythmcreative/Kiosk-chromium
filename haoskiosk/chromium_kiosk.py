@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.0
+# Version: 1.4.1
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH so 'pgrep -f "^chromium "' in run.sh's wait loop matches argv[0]
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -247,11 +247,30 @@ class ChromiumKiosk:
             "--remote-debugging-port=" + str(DEFAULT_CDP_PORT),
             "--remote-debugging-address=" + DEFAULT_CDP_HOST,
             "--remote-allow-origins=*",
+            # We always run under a plain Xorg session (never Wayland/headless), so pin the
+            # Ozone backend explicitly rather than relying on Chromium's auto-detection - on
+            # some boards/builds that auto-detection has been the actual cause of GPU-process
+            # init failures rather than the GPU driver itself.
+            "--ozone-platform=x11",
+            # Chromium's GPU process has its own sandbox layer, separate from --no-sandbox,
+            # that can fail to initialize under the more restricted namespaces/seccomp profile
+            # containers typically run with - even with SYS_ADMIN granted. Disabling it (we're
+            # already unsandboxed overall) avoids GPU-process-init crashes caused by that layer.
+            "--disable-gpu-sandbox",
+            # Chromium's internal GPU allow/block-list is tuned for common desktop/laptop GPUs
+            # and can misidentify or blanket-reject less common driver/board combos (e.g.
+            # Raspberry Pi's V3D), forcing an unwanted software fallback or GPU-process crash
+            # loop. Both flag spellings are kept for cross-version Chromium compatibility.
+            "--ignore-gpu-blocklist",
+            "--ignore-gpu-blacklist",
         ]
         if gl_mode == "software":
             args += ["--use-gl=angle", "--use-angle=swiftshader-webgl", "--disable-gpu-compositing"]
         else:
-            args += ["--use-gl=egl"]
+            # --use-angle=gl-egl pins ANGLE's own EGL backend explicitly (rather than letting
+            # --use-gl=egl alone decide), which has proven more reliable on Mesa/V3D than
+            # leaving ANGLE to auto-select.
+            args += ["--use-gl=egl", "--use-angle=gl-egl", "--enable-gpu-rasterization", "--enable-zero-copy"]
         return args
 
     async def _launch_process(self) -> None:

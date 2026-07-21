@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.1 - July 2026
+
+- **Fix:** install the `dbus` package explicitly. It was previously pulled in
+  transitively by Luakit; Chromium doesn't, so `dbus-daemon` (needed for the
+  session bus and Onboard's dbus-send IPC) was missing after the v1.4.0 switch
+- **Fix:** detect Chromium crashing *after* a successful startup (e.g. a
+  GPU/EGL crash a moment after loading a page), which previously went
+  unnoticed until `run.sh`'s browser-process check gave up and exited the
+  whole add-on. A new watchdog task now catches this, escalates from
+  hardware to software (SwiftShader) GL if the crash happened on hardware
+  GL, and restarts - capped at 5 restarts per 3 minutes to avoid a crash
+  loop if Chromium genuinely can't run in the environment
+- **GPU acceleration:** added `--ozone-platform=x11` (pin the X11 backend
+  explicitly rather than relying on auto-detection), `--disable-gpu-sandbox`
+  (Chromium's GPU-process sandbox layer can fail to init under a container's
+  restricted namespaces even with `--no-sandbox` set), and
+  `--ignore-gpu-blocklist`/`--ignore-gpu-blacklist` (avoid Chromium's
+  driver allow-list silently rejecting less common GPUs, e.g. Raspberry
+  Pi's V3D) - aimed at making real hardware acceleration work reliably
+  instead of always falling back to software rendering
+- **Memory:** enabled the add-on's `tmpfs: true` option so Chromium's `/tmp`
+  (used for shared-memory-like files via `--disable-dev-shm-usage`) is
+  RAM-backed. Supervisor add-ons can't set Docker's `shm_size` directly, so
+  this is the available way to give Chromium adequately-sized, fast shared
+  memory instead of a small and/or disk-backed default - a common cause of
+  Chromium renderer/GPU crashes in containers
+
 ## v1.4.0 - July 2026
 
 - **Replaced Luakit with regular Chromium** as the kiosk browser
