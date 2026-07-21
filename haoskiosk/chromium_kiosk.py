@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.13
+# Version: 1.4.14
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,10 +46,23 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.13"
+__version__ = "1.4.14"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
+
+# Chromium's enterprise-policy directory (Linux, "chromium" branding). Read on every startup
+# regardless of --user-data-dir/profile state, so force-installing an extension this way survives
+# PROFILE_DIR being wiped on every (re)launch - unlike an extension installed into the profile
+# itself, which a fresh profile would simply not have.
+CHROMIUM_POLICY_DIR = "/etc/chromium/policies/managed"
+CHROMIUM_POLICY_FILE = os.path.join(CHROMIUM_POLICY_DIR, "haoskiosk.json")
+# https://chromewebstore.google.com/detail/virtual-keyboard-plus/ecdaoooilnflogancccpapbeebbpkhoj
+# An in-page virtual keyboard that detects focus on web input fields directly inside Chromium,
+# rather than relying on Onboard's X11-level window + AT-SPI focus detection - the latter isn't
+# fully wireable in this environment (Alpine has no atk-bridge package for Chromium to expose
+# accessibility info to in the first place, see CHANGELOG v1.4.4).
+VIRTUAL_KEYBOARD_EXTENSION_ID = "ecdaoooilnflogancccpapbeebbpkhoj"
 
 HARD_RELOAD_FREQ = 10   # Every Nth periodic refresh also bypasses cache (mirrors old userconf.lua)
 MAX_LOAD_FAILURES = 5   # Consecutive main-document load failures before restarting Chromium
@@ -371,7 +384,27 @@ class ChromiumKiosk:
             args += ["--use-gl=angle", "--enable-gpu-rasterization", "--enable-zero-copy"]
         return args
 
+    def _write_chromium_policy(self) -> None:
+        """Force-install the Virtual Keyboard Plus extension via Chromium enterprise policy when
+        ONSCREEN_KEYBOARD is enabled - installs silently (no user consent dialog, that's what
+        force-install means) and, since it's driven by this policy file rather than anything
+        stored in the profile, keeps re-installing itself into every fresh profile."""
+        if not self.onscreen_keyboard:
+            with suppress(FileNotFoundError):
+                os.remove(CHROMIUM_POLICY_FILE)
+            return
+        os.makedirs(CHROMIUM_POLICY_DIR, exist_ok=True)
+        policy = {
+            "ExtensionInstallForcelist": [
+                f"{VIRTUAL_KEYBOARD_EXTENSION_ID};https://clients2.google.com/service/update2/crx"
+            ]
+        }
+        with open(CHROMIUM_POLICY_FILE, "w", encoding="utf-8") as f:
+            json.dump(policy, f)
+        logger.info("Force-installing Virtual Keyboard Plus extension (%s) via Chromium policy", VIRTUAL_KEYBOARD_EXTENSION_ID)
+
     async def _launch_process(self) -> None:
+        self._write_chromium_policy()
         gl_modes = ("software",) if self._force_software_gl else ("hardware", "software")
         for gl_mode in gl_modes:
             shutil.rmtree(PROFILE_DIR, ignore_errors=True)  # Always start from a fresh profile (no session restore)
