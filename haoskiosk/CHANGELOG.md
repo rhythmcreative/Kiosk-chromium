@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.4.5 - July 2026
+
+- **Fix: permanently stuck on software (SwiftShader) GL rendering.** Once a
+  single hardware-GL crash forced software rendering, the add-on never
+  tried hardware again for the rest of that container's life - even if the
+  crash was a one-off transient issue. Software rendering is *far* slower
+  for anything canvas/WebGL-animation-heavy (custom dashboard cards with
+  visual effects in particular can drop to a couple of frames per second),
+  so a session that got unlucky once during startup would silently stay
+  slow indefinitely with no further errors logged. Added a background task
+  that retries hardware GL after 30 minutes of stable software-GL
+  operation; if hardware crashes again it falls back to software and the
+  cooldown starts over, so a persistently broken GPU still degrades
+  gracefully rather than crash-looping
+- Added `GET /kiosk_status` REST endpoint reporting whether Chromium is
+  currently on hardware or software GL, how long it's been on software (if
+  so), and other kiosk-controller state - so this kind of issue is
+  instantly diagnosable instead of requiring a full log dump
+
 ## v1.4.4 - July 2026
 
 - **Performance:** Chromium's power-saving heuristics can throttle JS

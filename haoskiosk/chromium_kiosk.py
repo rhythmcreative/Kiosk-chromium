@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.4
+# Version: 1.4.5
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -60,6 +60,8 @@ RESTART_WINDOW_SECONDS = 180  # ...within this many seconds - avoids a tight cra
 HEALTH_CHECK_INTERVAL = 3          # Seconds between CDP reachability polls
 HEALTH_CHECK_HTTP_TIMEOUT = 2      # Seconds to wait for each poll
 HEALTH_CHECK_FAILURE_THRESHOLD = 2  # Consecutive failed polls before treating Chromium as down
+HARDWARE_GL_RETRY_INTERVAL = 1800  # Seconds of stable software-GL operation before retrying hardware GL
+HARDWARE_GL_RETRY_CHECK_INTERVAL = 60  # How often to check whether that cooldown has elapsed
 
 
 def _single_quote_escape(s: str) -> str:
@@ -142,9 +144,11 @@ class ChromiumKiosk:
         self._refresh_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
         self._health_check_task: asyncio.Task[None] | None = None
+        self._hardware_retry_task: asyncio.Task[None] | None = None
         self._restart_lock = asyncio.Lock()
         self._restart_timestamps: list[float] = []
         self._force_software_gl = False  # Set once hardware GL is observed to crash post-startup
+        self._software_gl_since: float | None = None  # When _force_software_gl was last set
         self._active_gl_mode: str | None = None
         self._stopping = False
         # Set when the restart-rate-limiter gives up permanently (see _restart_browser). rest_server.py
@@ -167,6 +171,13 @@ class ChromiumKiosk:
         # detection doesn't depend on that machinery at all - it also catches a hung-but-still-
         # alive process, which proc.wait() would never notice.
         self._health_check_task = asyncio.create_task(self._health_check_loop())
+        # A single hardware-GL crash forces software rendering for the rest of the process's
+        # life otherwise - fine for stability, but SwiftShader is pure software rasterization,
+        # so anything animation-heavy (canvas/WebGL dashboard cards in particular) can end up
+        # running at a couple of frames per second even though the underlying hardware crash was
+        # a one-off transient issue. Periodically give hardware GL another chance instead of
+        # sticking with software forever.
+        self._hardware_retry_task = asyncio.create_task(self._hardware_retry_loop())
         logger.info("ChromiumKiosk started: %s", self._current_url)
 
         if self.browser_refresh > 0:
@@ -182,6 +193,8 @@ class ChromiumKiosk:
             self._watchdog_task.cancel()
         if self._health_check_task:
             self._health_check_task.cancel()
+        if self._hardware_retry_task:
+            self._hardware_retry_task.cancel()
         if self.conn:
             with suppress(Exception):
                 await self.conn.close()
@@ -411,7 +424,29 @@ class ChromiumKiosk:
         if self._active_gl_mode == "hardware":
             logger.warning("Escalating to software (SwiftShader) GL rendering after a hardware-GL crash")
             self._force_software_gl = True
+            self._software_gl_since = time.monotonic()
         asyncio.create_task(self._restart_browser(reason))
+
+    async def _hardware_retry_loop(self) -> None:
+        """After a hardware-GL crash forces software rendering, periodically give hardware GL
+        another chance - a transient crash shouldn't condemn the whole session to SwiftShader's
+        far worse performance (very noticeable on anything canvas/WebGL-animation-heavy)."""
+        try:
+            while True:
+                await asyncio.sleep(HARDWARE_GL_RETRY_CHECK_INTERVAL)
+                if self._stopping or not self._force_software_gl or self._software_gl_since is None:
+                    continue
+                if time.monotonic() - self._software_gl_since < HARDWARE_GL_RETRY_INTERVAL:
+                    continue
+                logger.info(
+                    "Retrying hardware GL after %ds of stable software-GL operation",
+                    int(time.monotonic() - self._software_gl_since),
+                )
+                self._force_software_gl = False
+                self._software_gl_since = None
+                asyncio.create_task(self._restart_browser("Retrying hardware GL after cooldown"))
+        except asyncio.CancelledError:
+            pass
 
     async def _restart_browser(self, reason: str) -> None:
         if self._restart_lock.locked() or self._stopping:

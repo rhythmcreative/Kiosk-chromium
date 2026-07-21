@@ -334,6 +334,24 @@ Usage:
 
 `curl -X POST http://localhost:<REST_PORT>/refresh_browser`
 
+### kiosk_status
+
+Reports the Chromium kiosk controller's current state: whether it's running,
+whether it's on hardware or software (SwiftShader) GL rendering, how long
+it's been on software GL (if so), the current URL, and the count of
+consecutive main-document load failures.
+
+Check this if the dashboard feels slow/laggy, especially with
+animation-heavy custom cards (canvas/WebGL effects in particular) - a
+one-off GPU crash can fall back to software rendering, which is *far*
+slower for that kind of content even though the page itself loads fine.
+The add-on automatically retries hardware GL periodically after such a
+fallback, but restarting the add-on forces an immediate fresh attempt.
+
+Usage:
+
+`curl -X GET http://localhost:<REST_PORT>/kiosk_status`
+
 ### is_display_on
 
 Returns boolean depending on whether display is on or off.

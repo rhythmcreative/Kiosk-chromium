@@ -8,6 +8,7 @@
  Launch REST API server with following commands:
    POST /launch_url        {"url": "<url>"}
    POST /refresh_browser
+   GET  /kiosk_status
    GET  /is_display_on
    POST /display_on        (optional) {"timeout": <non-negative integer>}
    POST /display_off
@@ -63,6 +64,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from contextlib import suppress
 from datetime import datetime
 from functools import wraps
@@ -72,7 +74,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -460,7 +462,8 @@ PROTECTED_COMMANDS = {  # These commands can only be run on localhost unless RES
 
 HTTP_GET_COMMANDS = {  # Commands using GET (rather than POST) method
     "is_display_on",
-    "current_processes"
+    "current_processes",
+    "kiosk_status",
 }
 
 ### URL & Refresh
@@ -484,6 +487,30 @@ async def handle_refresh_browser(data: Payload) -> dict[str, Any]:  # pylint: di
         return {"success": False, "error": "Chromium kiosk controller not running"}
     success = await KIOSK.reload()
     return {"success": success}
+
+@register_function("kiosk_status")  # GET endpoint
+async def handle_kiosk_status(data: Payload) -> dict[str, Any]:  # pylint: disable=unused-argument
+    """
+    Report the Chromium kiosk controller's current state - in particular whether it's running
+    with hardware or software (SwiftShader) GL rendering, since a lingering software fallback
+    after a one-off GPU crash is the most common cause of animation-heavy dashboard cards
+    (canvas/WebGL effects in particular) performing very poorly despite nothing being wrong
+    with the page itself.
+    """
+    if KIOSK is None:
+        return {"success": False, "error": "Chromium kiosk controller not running (DEBUG_MODE?)"}
+    software_gl_since = None
+    if KIOSK._software_gl_since is not None:  # pylint: disable=protected-access
+        software_gl_since = round(time.monotonic() - KIOSK._software_gl_since)  # pylint: disable=protected-access
+    return {
+        "success": True,
+        "running": KIOSK.is_running(),
+        "gl_mode": KIOSK._active_gl_mode,  # pylint: disable=protected-access
+        "forced_software_gl": KIOSK._force_software_gl,  # pylint: disable=protected-access
+        "seconds_on_software_gl": software_gl_since,
+        "current_url": KIOSK._current_url,  # pylint: disable=protected-access
+        "consecutive_load_failures": KIOSK._consecutive_failures,  # pylint: disable=protected-access
+    }
 
 ### Display
 @register_function("is_display_on")  # GET endpoint – we register manually below
