@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.4.12 - July 2026
+
+- **Fix: found the actual root cause of GPU acceleration being fully
+  disabled**, thanks to the v1.4.11 stderr capture - captured directly
+  from a real device:
+  ```
+  ERROR:ui/gl/init/gl_factory.cc:110] Requested GL implementation
+  (gl=egl-gles2,angle=none) not found in allowed implementations:
+  [(gl=egl-angle,angle=default)].
+  ERROR:components/viz/service/main/viz_main_impl.cc:190] Exiting GPU
+  process due to errors during initialization
+  ```
+  `--use-gl=egl` requests the old direct-EGL path *without* going through
+  ANGLE. Modern Chromium on Linux ("ANGLE everywhere") no longer supports
+  that combination at all - the GPU process was exiting immediately on
+  every single launch, silently leaving every GPU feature (compositing,
+  rasterization, WebGL, ...) disabled/software for the rest of that run.
+  It never crashed the browser or failed CDP, so nothing built so far
+  could catch it - only reading Chromium's own stderr (v1.4.11) surfaced
+  it. Switched to `--use-gl=angle` with no explicit `--use-angle=`
+  override, which is exactly what the error message itself says is
+  accepted (`angle=default`)
+
 ## v1.4.11 - July 2026
 
 - **Confirmed via real `gpu_info` output** (thanks to the v1.4.10 fix):

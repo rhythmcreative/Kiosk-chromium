@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.11
+# Version: 1.4.12
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.11"
+__version__ = "1.4.12"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -355,16 +355,20 @@ class ChromiumKiosk:
         if gl_mode == "software":
             args += ["--use-gl=angle", "--use-angle=swiftshader-webgl", "--disable-gpu-compositing"]
         else:
-            # Deliberately NOT pinning --use-angle explicitly here. An earlier version pinned
-            # --use-angle=gl-egl, which is real but wrong: it makes ANGLE translate ES-style draw
-            # calls into *desktop* OpenGL over EGL. Raspberry Pi's V3D driver only natively
-            # implements OpenGL ES (no desktop GL), so that flag forced every single draw call
-            # through an unnecessary ES-to-desktop-GL translation shim - it didn't crash or fall
-            # back to software (so this looked like "hardware GL" in every log/status check), it
-            # just made GPU-heavy content (canvas/WebGL dashboard cards in particular) crawl at a
-            # couple of frames per second. Leaving --use-angle unset lets Chromium auto-select the
-            # right backend for the driver (gles-egl on V3D), matching working Pi kiosk configs.
-            args += ["--use-gl=egl", "--enable-gpu-rasterization", "--enable-zero-copy"]
+            # --use-gl=egl requests the old direct-EGL path *without* going through ANGLE
+            # (internally: gl=egl-gles2,angle=none). Confirmed via captured Chromium stderr on a
+            # real device that this build's GPU process refuses that combination outright:
+            #   "Requested GL implementation (gl=egl-gles2,angle=none) not found in allowed
+            #    implementations: [(gl=egl-angle,angle=default)]" -> "Exiting GPU process due to
+            #    errors during initialization"
+            # Modern Chromium on Linux only supports going through ANGLE ("ANGLE everywhere");
+            # the GPU process was exiting immediately on every single launch, silently leaving
+            # every GPU feature (compositing, rasterization, WebGL, ...) disabled/software for
+            # the rest of that run - it never crashed the browser or failed CDP, so nothing
+            # caught it except reading Chromium's own stderr. --use-gl=angle with no explicit
+            # --use-angle= (letting it auto-select, i.e. angle=default) is what the error message
+            # itself says is accepted.
+            args += ["--use-gl=angle", "--enable-gpu-rasterization", "--enable-zero-copy"]
         return args
 
     async def _launch_process(self) -> None:
