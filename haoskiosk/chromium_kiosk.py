@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.10
+# Version: 1.4.11
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.10"
+__version__ = "1.4.11"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -143,6 +143,7 @@ class ChromiumKiosk:
         self._hard_reload_count = 0
         self._refresh_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self._health_check_task: asyncio.Task[None] | None = None
         self._hardware_retry_task: asyncio.Task[None] | None = None
         self._restart_lock = asyncio.Lock()
@@ -195,6 +196,8 @@ class ChromiumKiosk:
             self._health_check_task.cancel()
         if self._hardware_retry_task:
             self._hardware_retry_task.cancel()
+        if self._stderr_task:
+            self._stderr_task.cancel()
         if self.conn:
             with suppress(Exception):
                 await self.conn.close()
@@ -375,8 +378,14 @@ class ChromiumKiosk:
             self.proc = await asyncio.create_subprocess_exec(
                 CHROMIUM_BIN, *args,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
+            # Chromium's own diagnostics (EGL/GBM/Mesa/GPU-process errors in particular) go to
+            # stderr. A GPU-process init failure doesn't necessarily crash the whole browser or
+            # even show up as a CDP-level problem - Chromium just silently runs with GPU features
+            # disabled/software - so without this we'd only ever know THAT it failed (via
+            # get_gpu_info), never WHY.
+            self._stderr_task = asyncio.create_task(self._stream_stderr(self.proc))
 
             if await self._wait_for_cdp_ready(CDP_READY_TIMEOUT):
                 logger.info("Chromium ready (%s GL, pid=%d)", gl_mode, self.proc.pid)
@@ -387,6 +396,28 @@ class ChromiumKiosk:
             await self._kill_process()
 
         raise RuntimeError("Chromium failed to start with both hardware and software GL rendering")
+
+    _GPU_LOG_KEYWORDS = ("gpu", "egl", "gbm", "gl error", "glerror", "vulkan", "angle", "mesa", "dri", "v3d", "vc4")
+
+    async def _stream_stderr(self, proc: asyncio.subprocess.Process) -> None:
+        """Log Chromium's stderr lines that look GPU/graphics-related at WARNING (so they show up
+        in the add-on's normal log automatically); everything else at DEBUG to avoid flooding it
+        with Chromium's usual unrelated noise."""
+        if proc.stderr is None:
+            return
+        try:
+            async for raw_line in proc.stderr:
+                line = raw_line.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                if any(kw in line.lower() for kw in self._GPU_LOG_KEYWORDS):
+                    logger.warning("[chromium stderr] %s", line)
+                else:
+                    logger.debug("[chromium stderr] %s", line)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # pylint: disable=broad-except
+            logger.debug("[_stream_stderr] Reader stopped: %s", e)
 
     async def _wait_for_cdp_ready(self, timeout: float) -> bool:
         url = f"http://{DEFAULT_CDP_HOST}:{DEFAULT_CDP_PORT}/json/version"

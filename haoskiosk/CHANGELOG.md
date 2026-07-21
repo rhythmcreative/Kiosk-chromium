@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.4.11 - July 2026
+
+- **Confirmed via real `gpu_info` output** (thanks to the v1.4.10 fix):
+  GPU acceleration is completely disabled on at least one real device -
+  `opengl: disabled_off`, `webgl: disabled_off`,
+  `gpu_compositing: disabled_software`, `rasterization: disabled_software`,
+  empty GL renderer/vendor strings - despite our own tracking correctly
+  reporting "hardware GL" (the Chromium *process* stays up fine; only its
+  internal GPU process/feature initialization silently fails). None of the
+  fixes so far could have caught this, since nothing crashes at the
+  process or CDP level - Chromium just quietly runs everything in
+  software.
+- We were discarding Chromium's own stderr entirely
+  (`stderr=DEVNULL`), which is where the actual EGL/GBM/Mesa/GPU-process
+  error message would appear - so there was no way to see *why* GPU init
+  was failing, only that it had. Now captured via a background reader
+  task; lines matching GPU-related keywords (gpu, egl, gbm, gl error,
+  vulkan, angle, mesa, dri, v3d, vc4) are logged at WARNING (so they show
+  up in the add-on's regular log automatically), everything else at DEBUG
+  to avoid flooding it with Chromium's usual unrelated noise
+
 ## v1.4.10 - July 2026
 
 - **Fix:** the `gpu_info` GPU-status logging/endpoint added in v1.4.7/v1.4.9
