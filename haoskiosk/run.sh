@@ -3,7 +3,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.4.12
+# Version: 1.4.13
 # Copyright Jeff Kosowsky
 # Date: July 2026
 #
@@ -617,6 +617,26 @@ if [[ "$ONSCREEN_KEYBOARD" = true && -n "$SCREEN_WIDTH" && -n "$SCREEN_HEIGHT" ]
     ### Launch 'Onboard' keyboard
     bashio::log.info "Starting Onboard onscreen keyboard"
     onboard &
+
+    # Verify Onboard actually registered its org.onboard.Onboard D-Bus service - that's what
+    # kiosk.toggle_keyboard (gesture/REST/Ctrl+Alt+o) sends dbus-send commands to. If it never
+    # shows up, no toggle path (manual or auto-show) can ever work, regardless of window
+    # layering/visibility settings - worth knowing definitively rather than guessing from
+    # symptoms alone.
+    ONBOARD_DBUS_READY=""
+    for _ in $(seq 1 10); do
+        if dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+             org.freedesktop.DBus.NameHasOwner string:org.onboard.Onboard 2>/dev/null | grep -q "boolean true"; then
+            ONBOARD_DBUS_READY=1
+            break
+        fi
+        sleep 0.5
+    done
+    if [ -n "$ONBOARD_DBUS_READY" ]; then
+        bashio::log.info "Onboard D-Bus service (org.onboard.Onboard) is registered - toggle/hide IPC should work"
+    else
+        bashio::log.error "Onboard D-Bus service (org.onboard.Onboard) never appeared on the session bus after 5s - toggle/hide (gesture, REST, Ctrl+Alt+o) will NOT work. Onboard's own startup output above may show why."
+    fi
 fi
 
 ### Set Audio sink

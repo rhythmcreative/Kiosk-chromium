@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.13 - July 2026
+
+- The onscreen keyboard reportedly never appears under any circumstance
+  (not even manual toggle via gesture/REST/Ctrl+Alt+o, not just auto-show)
+  on at least one device. That points at something more fundamental than
+  the v1.4.4 window-layering fix - most likely Onboard never actually
+  registering the `org.onboard.Onboard` D-Bus service that every
+  toggle/hide path (gesture, REST, Ctrl+Alt+o) sends `dbus-send` commands
+  to. `run.sh` now checks for that service (`NameHasOwner` via
+  `dbus-send`) for up to 5s right after starting Onboard and logs clearly
+  whether it registered - a direct, definitive answer instead of
+  inferring from symptoms
+
 ## v1.4.12 - July 2026
 
 - **Fix: found the actual root cause of GPU acceleration being fully
