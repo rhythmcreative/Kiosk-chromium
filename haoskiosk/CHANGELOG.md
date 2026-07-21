@@ -1,38 +1,14 @@
 # Changelog
 
-## v1.4.15 - July 2026
+## v1.4.16 - July 2026
 
-- **Confirmed the hardware-GL fix (v1.4.12) works end to end**: a real
-  device now reports `renderer=ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES
-  3.1 Mesa 26.1.1)`, `gpu_compositing: enabled`, `webgl: enabled`
-- The v1.4.14 extension force-install only ever logged that we *asked*
-  Chromium to install Virtual Keyboard Plus, never whether it actually
-  succeeded - and since it's fetched fresh from the Chrome Web Store on
-  every single launch (`PROFILE_DIR` is wiped each time), that's a real
-  install that can fail for reasons outside this add-on's control (no
-  internet at that moment, this Chromium build lacking the Google API
-  keys the Web Store install flow needs, etc.). Added
-  `ChromiumKiosk.is_extension_installed()` (checks for a live
-  `chrome-extension://<id>/...` target via CDP's `Target.getTargets` -
-  direct proof, not inference) and a background check that polls for up
-  to 15s after startup and logs a clear confirmation or a specific,
-  actionable warning if it never loads
-
-## v1.4.14 - July 2026
-
-- Added [Virtual Keyboard Plus](https://chromewebstore.google.com/detail/virtual-keyboard-plus/ecdaoooilnflogancccpapbeebbpkhoj)
-  as an in-page alternative/complement to Onboard, gated behind the same
-  `ONSCREEN_KEYBOARD` option. It detects focus on web input fields
-  directly inside Chromium, sidestepping Onboard's X11-window + AT-SPI
-  focus-detection path entirely - which matters here since Alpine has no
-  `atk-bridge` package for Chromium to expose accessibility info to, so
-  Onboard's auto-show could never fully work regardless of window
-  layering. Force-installed via Chromium's `ExtensionInstallForcelist`
-  enterprise policy (`/etc/chromium/policies/managed/`), written fresh
-  before every launch - unlike installing into the profile itself, this
-  survives `PROFILE_DIR` being wiped on every (re)launch, since the policy
-  lives outside the profile and Chromium re-applies it (re-installing the
-  extension) into whatever fresh profile it finds
+- Reverted the Virtual Keyboard Plus extension force-install (v1.4.14,
+  v1.4.15) at the user's request. Back to Onboard only for
+  `ONSCREEN_KEYBOARD` - its D-Bus service is confirmed registering
+  correctly (v1.4.13), so toggle/hide (gesture, REST, Ctrl+Alt+o) should
+  work; if the keyboard still doesn't show, the next thing to check is
+  window visibility/focus rather than the D-Bus IPC or an extension
+  install
 
 ## v1.4.13 - July 2026
 
