@@ -338,8 +338,14 @@ Usage:
 
 Reports the Chromium kiosk controller's current state: whether it's running,
 whether it's on hardware or software (SwiftShader) GL rendering, how long
-it's been on software GL (if so), the current URL, and the count of
-consecutive main-document load failures.
+it's been on software GL (if so), the current URL, the count of
+consecutive main-document load failures, and (`gpu_info`) Chromium's own
+authoritative GPU feature status - the same data `chrome://gpu` itself
+reads from (`gpu_compositing`, `rasterization`, `webgl` feature status,
+GPU device/driver info). The `gl_mode`/`forced_software_gl` fields only
+reflect which launch flags we used and whether the process stayed up;
+`gpu_info` is the only way to confirm GPU compositing/rasterization/WebGL
+are *actually* active end to end.
 
 Check this if the dashboard feels slow/laggy, especially with
 animation-heavy custom cards (canvas/WebGL effects in particular) - a

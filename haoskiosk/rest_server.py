@@ -74,7 +74,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.6"
+__version__ = "1.4.7"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -510,6 +510,11 @@ async def handle_kiosk_status(data: Payload) -> dict[str, Any]:  # pylint: disab
         "seconds_on_software_gl": software_gl_since,
         "current_url": KIOSK._current_url,  # pylint: disable=protected-access
         "consecutive_load_failures": KIOSK._consecutive_failures,  # pylint: disable=protected-access
+        # Chromium's own authoritative GPU status (same data chrome://gpu reads from) - the
+        # gl_mode/forced_software_gl fields above only reflect which launch flags we used and
+        # whether the process stayed up, not whether GPU compositing/rasterization/WebGL are
+        # actually active end to end.
+        "gpu_info": await KIOSK.get_gpu_info(),
     }
 
 ### Display

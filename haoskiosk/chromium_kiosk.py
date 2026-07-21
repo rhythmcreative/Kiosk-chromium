@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.6
+# Version: 1.4.7
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.6"
+__version__ = "1.4.7"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -211,6 +211,35 @@ class ChromiumKiosk:
 
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.returncode is None
+
+    async def get_gpu_info(self) -> dict[str, Any] | None:
+        """
+        Query Chromium's real, authoritative GPU feature status via CDP's SystemInfo.getInfo -
+        the exact same data chrome://gpu itself reads from. Our own hardware/software GL-mode
+        tracking only knows which launch flags we used and whether the process stayed up; it
+        can't tell us whether GPU compositing/rasterization/WebGL are *actually* active, which is
+        the only way to be sure the render path is really accelerated end to end rather than
+        silently falling back to software for some unrelated reason (driver quirk, missing
+        extension, etc.) despite hardware-mode flags and a healthy process.
+        """
+        if self.conn is None:
+            return None
+        try:
+            result = await self.conn.send("SystemInfo.getInfo", timeout=10.0)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("[get_gpu_info] SystemInfo.getInfo failed: %s", e)
+            return None
+        gpu = result.get("gpu", {})
+        return {
+            "feature_status": gpu.get("featureStatus", {}),
+            "devices": [
+                {"vendor": d.get("vendorString"), "device": d.get("deviceString"),
+                 "driver_vendor": d.get("driverVendor"), "driver_version": d.get("driverVersion")}
+                for d in gpu.get("devices", [])
+            ],
+            "gl_renderer": gpu.get("auxAttributes", {}).get("glRenderer"),
+            "gl_vendor": gpu.get("auxAttributes", {}).get("glVendor"),
+        }
 
     # ------------------------------------------------------------------ #
     # Public control API (used by rest_server.py / gestures)

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.7 - July 2026
+
+- Added `gpu_info` to the `GET /kiosk_status` response: Chromium's own
+  authoritative GPU feature status via CDP's `SystemInfo.getInfo` - the
+  exact same data `chrome://gpu` itself reads from (`gpu_compositing`,
+  `rasterization`, `webgl` feature status, GPU device/driver strings). The
+  existing `gl_mode`/`forced_software_gl` fields only reflect which launch
+  flags we used and whether the process stayed up; they can't tell you
+  whether GPU compositing/rasterization/WebGL are *actually* active end to
+  end, which is what actually determines animation performance
+
 ## v1.4.6 - July 2026
 
 - **Fix: real root cause of GPU-heavy content (canvas/WebGL animations)
