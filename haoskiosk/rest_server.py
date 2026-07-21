@@ -72,7 +72,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 

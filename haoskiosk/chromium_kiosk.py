@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.3
+# Version: 1.4.4
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.3"
+__version__ = "1.4.4"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -280,6 +280,23 @@ class ChromiumKiosk:
             # loop. Both flag spellings are kept for cross-version Chromium compatibility.
             "--ignore-gpu-blocklist",
             "--ignore-gpu-blacklist",
+            # --- Performance: a kiosk window is never "in the background" from the user's
+            # perspective, but Chromium's power-saving heuristics don't know that - an unfocused
+            # or occluded window (easy to end up with under a bare window manager with no
+            # decorations) gets its JS timers/rAF throttled and rendering deprioritized, which is
+            # the single biggest cause of a kiosk dashboard feeling laggy/stale rather than an
+            # actual rendering bottleneck. Disable all of that unconditionally.
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-ipc-flooding-protection",
+            "--disable-hang-monitor",
+            # This is always a single trusted origin (the user's own HA instance) in a single
+            # --app window, so the extra renderer processes/IPC overhead Site Isolation adds for
+            # cross-origin protection buys nothing here and only costs memory/CPU - meaningful on
+            # the kind of constrained boards this add-on typically runs on.
+            "--disable-site-isolation-trials",
+            "--renderer-process-limit=1",
         ]
         if gl_mode == "software":
             args += ["--use-gl=angle", "--use-angle=swiftshader-webgl", "--disable-gpu-compositing"]

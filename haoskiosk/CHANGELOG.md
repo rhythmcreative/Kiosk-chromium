@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.4.4 - July 2026
+
+- **Performance:** Chromium's power-saving heuristics can throttle JS
+  timers/`requestAnimationFrame` and deprioritize rendering for a window it
+  thinks is unfocused/occluded - easy to trip under a bare window manager
+  with no decorations, and the single biggest cause of a kiosk dashboard
+  feeling laggy/stale rather than an actual rendering bottleneck. Disabled
+  unconditionally via `--disable-background-timer-throttling`,
+  `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`,
+  `--disable-ipc-flooding-protection`, `--disable-hang-monitor`. Also disabled
+  Site Isolation (`--disable-site-isolation-trials`, `--renderer-process-limit=1`)
+  since this is always a single trusted origin in a single `--app` window -
+  the extra process/IPC overhead it adds buys nothing here
+- **Fix: onscreen keyboard never appeared.** Onboard was starting fine (dconf
+  settings applied, `auto-show`/`force-to-top` set) but its window was
+  getting stacked *below* Chromium's true-fullscreen `--kiosk` window -
+  Onboard's own "always on top" request isn't enough to win against that,
+  only the window manager's own layering rules are. Added an Openbox
+  `<applications>` rule forcing Onboard's window onto the "above" layer,
+  which Openbox does respect even over a fullscreen window. (Investigated
+  wiring up full AT-SPI-based auto-show, i.e. Onboard automatically
+  detecting text-field focus inside Chromium's page content - not currently
+  feasible: Alpine only packages the AT-SPI registry daemon, not the
+  GTK/ATK bridge library apps need to actually expose accessibility info to
+  it, and that bridge isn't available to install from Alpine's repos)
+
 ## v1.4.3 - July 2026
 
 - **Fix:** despite the v1.4.2 CDP health-check backstop, a real deployment

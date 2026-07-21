@@ -3,7 +3,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.4.3
+# Version: 1.4.4
 # Copyright Jeff Kosowsky
 # Date: July 2026
 #
@@ -420,6 +420,31 @@ awk -v f=/tmp/new_keybinds.xml '/<\/keyboard>/ { system("cat " f) } { print }' \
     "$RC_XML" > /tmp/rc.new.xml
 mv /tmp/rc.new.xml "$RC_XML"
 rm /tmp/new_keybinds.xml
+
+# Force Onboard's window onto Openbox's "above" layer, which (unlike a plain always-on-top
+# request from the application itself, e.g. Onboard's own 'force-to-top' setting) Openbox
+# actually respects even over a true-fullscreen window like Chromium's --kiosk window. Without
+# this, Onboard can start and even auto-show successfully but simply never becomes visible,
+# since it stays stacked below the fullscreen browser. Appended as its own <applications> block
+# (valid XML as a sibling section - Openbox merges multiple) rather than trying to locate/edit
+# an existing one, since the default rc.xml's <applications> section (if present at all) isn't
+# guaranteed to be uncommented or in a predictable spot.
+cat <<'EOF' > /tmp/new_app_rules.xml
+  <applications>
+    <application class="onboard">
+      <layer>above</layer>
+      <focus>no</focus>
+      <decor>no</decor>
+      <skip_taskbar>yes</skip_taskbar>
+      <skip_pager>yes</skip_pager>
+    </application>
+  </applications>
+
+EOF
+awk -v f=/tmp/new_app_rules.xml '/<\/openbox_config>/ { system("cat " f) } { print }' \
+    "$RC_XML" > /tmp/rc.new.xml
+mv /tmp/rc.new.xml "$RC_XML"
+rm /tmp/new_app_rules.xml
 
 # Start openbox
 openbox &
