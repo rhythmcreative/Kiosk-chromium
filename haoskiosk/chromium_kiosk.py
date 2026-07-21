@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.1
+# Version: 1.4.2
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH so 'pgrep -f "^chromium "' in run.sh's wait loop matches argv[0]
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -57,6 +57,9 @@ CDP_READY_TIMEOUT = 20  # Seconds to wait for Chromium's CDP endpoint to come up
 GRACEFUL_STOP_TIMEOUT = 5  # Seconds to wait for SIGTERM before SIGKILL
 MAX_RESTARTS_PER_WINDOW = 5   # Give up restarting (let the container exit) after this many restarts...
 RESTART_WINDOW_SECONDS = 180  # ...within this many seconds - avoids a tight crash-restart loop
+HEALTH_CHECK_INTERVAL = 3          # Seconds between CDP reachability polls
+HEALTH_CHECK_HTTP_TIMEOUT = 2      # Seconds to wait for each poll
+HEALTH_CHECK_FAILURE_THRESHOLD = 2  # Consecutive failed polls before treating Chromium as down
 
 
 def _single_quote_escape(s: str) -> str:
@@ -138,6 +141,7 @@ class ChromiumKiosk:
         self._hard_reload_count = 0
         self._refresh_task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
+        self._health_check_task: asyncio.Task[None] | None = None
         self._restart_lock = asyncio.Lock()
         self._restart_timestamps: list[float] = []
         self._force_software_gl = False  # Set once hardware GL is observed to crash post-startup
@@ -152,6 +156,13 @@ class ChromiumKiosk:
         await self._launch_process()
         await self._connect_cdp()
         self._watchdog_task = asyncio.create_task(self._watch_process_exit(self.proc))
+        # Belt-and-suspenders: proc.wait() *should* unblock as soon as Chromium exits, but relies
+        # on asyncio's child-watcher/SIGCHLD machinery, which has proven unreliable in at least
+        # one deployment environment (a crash went undetected until run.sh's own ~15s pgrep-based
+        # timeout gave up on the whole add-on). This polls CDP reachability directly instead, so
+        # detection doesn't depend on that machinery at all - it also catches a hung-but-still-
+        # alive process, which proc.wait() would never notice.
+        self._health_check_task = asyncio.create_task(self._health_check_loop())
         logger.info("ChromiumKiosk started: %s", self._current_url)
 
         if self.browser_refresh > 0:
@@ -165,6 +176,8 @@ class ChromiumKiosk:
             self._refresh_task.cancel()
         if self._watchdog_task:
             self._watchdog_task.cancel()
+        if self._health_check_task:
+            self._health_check_task.cancel()
         if self.conn:
             with suppress(Exception):
                 await self.conn.close()
@@ -330,18 +343,54 @@ class ChromiumKiosk:
     async def _watch_process_exit(self, watched_proc: asyncio.subprocess.Process) -> None:
         """Detect Chromium exiting on its own (e.g. a GPU/renderer crash bringing down the whole
         browser) - unlike CDP-level load failures, nothing else notices this, since the CDP
-        websocket just silently drops. Escalates to software GL if hardware GL just crashed."""
+        websocket just silently drops. This is the fast path when it works; '_health_check_loop'
+        is the reliable backstop when it doesn't (see the comment in 'start()')."""
         try:
             returncode = await watched_proc.wait()
         except asyncio.CancelledError:
             raise
         if self._stopping or watched_proc is not self.proc:
             return  # Expected shutdown, or superseded by a restart that already replaced self.proc
-        logger.error("Chromium process exited unexpectedly (code=%s, gl=%s)", returncode, self._active_gl_mode)
+        self._handle_unexpected_down(f"Chromium process exited unexpectedly (code={returncode})")
+
+    async def _health_check_loop(self) -> None:
+        """Poll CDP reachability directly as a restart trigger, independent of process-exit
+        detection. Catches both a dead process AND a still-running-but-unresponsive one."""
+        url = f"http://{DEFAULT_CDP_HOST}:{DEFAULT_CDP_PORT}/json/version"
+        consecutive_failures = 0
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=HEALTH_CHECK_HTTP_TIMEOUT)) as session:
+                while True:
+                    await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+                    if self._stopping or self._restart_lock.locked():
+                        consecutive_failures = 0  # A restart is already in flight; don't pile on
+                        continue
+                    try:
+                        async with session.get(url) as resp:
+                            healthy = resp.status == 200
+                    except (OSError, ConnectionError, asyncio.TimeoutError):
+                        healthy = False
+
+                    if healthy:
+                        consecutive_failures = 0
+                        continue
+                    consecutive_failures += 1
+                    logger.warning("Chromium health check failed (%d/%d)", consecutive_failures, HEALTH_CHECK_FAILURE_THRESHOLD)
+                    if consecutive_failures >= HEALTH_CHECK_FAILURE_THRESHOLD:
+                        consecutive_failures = 0
+                        self._handle_unexpected_down("Chromium unresponsive (CDP health check failed)")
+        except asyncio.CancelledError:
+            pass
+
+    def _handle_unexpected_down(self, reason: str) -> None:
+        """Shared trigger for both detection paths: escalate GL mode if needed, then restart."""
+        if self._stopping:
+            return
+        logger.error("%s (gl=%s)", reason, self._active_gl_mode)
         if self._active_gl_mode == "hardware":
             logger.warning("Escalating to software (SwiftShader) GL rendering after a hardware-GL crash")
             self._force_software_gl = True
-        asyncio.create_task(self._restart_browser(f"Chromium process exited unexpectedly (code={returncode})"))
+        asyncio.create_task(self._restart_browser(reason))
 
     async def _restart_browser(self, reason: str) -> None:
         if self._restart_lock.locked() or self._stopping:

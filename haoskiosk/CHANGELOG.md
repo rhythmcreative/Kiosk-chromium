@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.4.2 - July 2026
+
+- **Fix:** the v1.4.1 crash-recovery watchdog relied solely on
+  `asyncio.subprocess.Process.wait()` to detect Chromium exiting - which
+  depends on asyncio's child-watcher/SIGCHLD machinery. In at least one real
+  deployment, Chromium crashed a few seconds after startup and that watchdog
+  never logged anything, so nothing restarted it until `run.sh`'s own
+  ~15s pgrep-based timeout gave up and exited the whole add-on. Added a CDP
+  reachability health check (polls `/json/version` every 3s; 2 consecutive
+  failures triggers the same escalate-to-software-GL-and-restart logic) that
+  doesn't depend on that machinery at all, and also catches a still-running
+  but unresponsive process, which process-exit detection could never catch
+  regardless. The original process-exit watchdog is kept as a faster path
+  for when it does fire.
+
 ## v1.4.1 - July 2026
 
 - **Fix:** install the `dbus` package explicitly. It was previously pulled in
