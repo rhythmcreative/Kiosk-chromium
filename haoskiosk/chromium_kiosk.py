@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.7
+# Version: 1.4.8
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.7"
+__version__ = "1.4.8"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -582,8 +582,12 @@ class ChromiumKiosk:
         is_auth_page = url.startswith(self.ha_url_base + "/auth/")
         under_ha = (url + "/").startswith(self.ha_url_base + "/")
         if not self._settings_applied and under_ha and not is_auth_page:
-            await self._apply_ha_settings()
-            self._settings_applied = True
+            # Only mark as applied if the JS actually ran - otherwise a transient failure (most
+            # commonly: this load event fired for HA's unauthenticated "/" shell right as it was
+            # about to client-side-redirect to /auth/authorize, so by the time our eval reaches
+            # Chromium the target has already navigated away - would silently and permanently
+            # skip applying sidebar/theme settings for the rest of the session.
+            self._settings_applied = await self._apply_ha_settings()
 
     async def _do_auto_login(self) -> None:
         if not self.ha_username or not self.ha_password:
@@ -625,7 +629,7 @@ class ChromiumKiosk:
         """
         await self._eval_js(js, "auto_login")
 
-    async def _apply_ha_settings(self) -> None:
+    async def _apply_ha_settings(self) -> bool:
         js = f"""
             try {{
                 localStorage.setItem('browser_mod-browser-id', 'haos_kiosk');
@@ -647,17 +651,20 @@ class ChromiumKiosk:
                 console.error('Failed to set HA sidebar/theme settings:', err);
             }}
         """
-        await self._eval_js(js, "ha_settings")
+        return await self._eval_js(js, "ha_settings")
 
-    async def _eval_js(self, js: str, label: str) -> None:
+    async def _eval_js(self, js: str, label: str) -> bool:
         if self.conn is None:
-            return
+            return False
         try:
             result = await self.conn.send("Runtime.evaluate", {"expression": js, "awaitPromise": False})
             if result.get("exceptionDetails"):
                 logger.warning("[%s] JS exception: %s", label, result["exceptionDetails"])
+                return False
+            return True
         except Exception as e:  # pylint: disable=broad-except
             logger.warning("[%s] Failed to evaluate JS: %s", label, e)
+            return False
 
     @staticmethod
     def _suppress_errors_js() -> str:

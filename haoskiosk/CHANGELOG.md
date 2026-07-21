@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.8 - July 2026
+
+- **Fix:** the `[ha_settings] Failed to evaluate JS: ... Inspected target
+  navigated or closed` warning seen on every fresh start (harmless on its
+  own - it's HA's frontend client-side-redirecting an unauthenticated "/"
+  load to `/auth/authorize` right as our settings-injection eval reaches
+  Chromium) was silently and *permanently* skipping the HA sidebar/theme
+  settings for the rest of the session. `_settings_applied` was set `True`
+  unconditionally after attempting the injection, regardless of whether it
+  actually succeeded. Now only marks it applied on an actual success, so a
+  failed attempt gets retried on the next real dashboard load instead of
+  giving up silently
+
 ## v1.4.7 - July 2026
 
 - Added `gpu_info` to the `GET /kiosk_status` response: Chromium's own
