@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.9
+# Version: 1.4.10
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.9"
+__version__ = "1.4.10"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -224,11 +224,20 @@ class ChromiumKiosk:
         """
         if self.conn is None:
             return None
+        # SystemInfo.getInfo is only available on the browser-level CDP target, not the page
+        # target self.conn is connected to ("... is only supported on the browser target") - so
+        # this needs its own short-lived connection rather than reusing self.conn.
+        browser_conn: CDPConnection | None = None
         try:
-            result = await self.conn.send("SystemInfo.getInfo", timeout=10.0)
+            browser_conn = await CDPConnection.connect_browser(DEFAULT_CDP_HOST, DEFAULT_CDP_PORT)
+            result = await browser_conn.send("SystemInfo.getInfo", timeout=10.0)
         except Exception as e:  # pylint: disable=broad-except
             logger.warning("[get_gpu_info] SystemInfo.getInfo failed: %s", e)
             return None
+        finally:
+            if browser_conn is not None:
+                with suppress(Exception):
+                    await browser_conn.close()
         gpu = result.get("gpu", {})
         return {
             "feature_status": gpu.get("featureStatus", {}),

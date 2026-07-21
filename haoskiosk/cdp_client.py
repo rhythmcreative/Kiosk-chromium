@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: cdp_client.py
-# Version: 1.4.9
+# Version: 1.4.10
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -41,6 +41,22 @@ async def get_page_target(host: str = DEFAULT_CDP_HOST, port: int = DEFAULT_CDP_
         if target.get("type") == "page":
             return target
     return None
+
+
+async def get_browser_websocket_url(host: str = DEFAULT_CDP_HOST, port: int = DEFAULT_CDP_PORT) -> str | None:
+    """
+    Return the websocket URL for the browser-level CDP target (distinct from any page target).
+    Some domains - notably SystemInfo, used for real GPU status - are only available on this
+    target: connecting to a page target and calling them fails with "... is only supported on
+    the browser target".
+    """
+    url = f"http://{host}:{port}/json/version"
+    async with ClientSession(timeout=_HTTP_TIMEOUT) as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
+            info = await resp.json()
+    return info.get("webSocketDebuggerUrl")
 
 
 async def cdp_navigate(url: str, host: str = DEFAULT_CDP_HOST, port: int = DEFAULT_CDP_PORT, timeout: float = 5.0) -> bool:
@@ -106,9 +122,23 @@ class CDPConnection:
         target = await get_page_target(host, port)
         if target is None or not target.get("webSocketDebuggerUrl"):
             raise ConnectionError(f"No CDP page target available on {host}:{port}")
+        return await cls._connect_ws(target["webSocketDebuggerUrl"], session)
+
+    @classmethod
+    async def connect_browser(cls, host: str = DEFAULT_CDP_HOST, port: int = DEFAULT_CDP_PORT,
+                               session: ClientSession | None = None) -> "CDPConnection":
+        """Open a connection to the browser-level CDP target (needed for e.g. SystemInfo.getInfo,
+        which isn't available on a page target)."""
+        ws_url = await get_browser_websocket_url(host, port)
+        if not ws_url:
+            raise ConnectionError(f"No CDP browser target available on {host}:{port}")
+        return await cls._connect_ws(ws_url, session)
+
+    @classmethod
+    async def _connect_ws(cls, ws_url: str, session: ClientSession | None = None) -> "CDPConnection":
         owns_session = session is None
         session = session or ClientSession()
-        ws = await session.ws_connect(target["webSocketDebuggerUrl"], timeout=10, max_msg_size=0)
+        ws = await session.ws_connect(ws_url, timeout=10, max_msg_size=0)
         conn = cls(ws)
         conn._session = session  # type: ignore[attr-defined]
         conn._owns_session = owns_session  # type: ignore[attr-defined]

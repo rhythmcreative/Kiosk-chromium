@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.4.10 - July 2026
+
+- **Fix:** the `gpu_info` GPU-status logging/endpoint added in v1.4.7/v1.4.9
+  never actually worked - confirmed from a real deployment log:
+  `SystemInfo.getInfo failed: ... "SystemInfo.getInfo is only supported on
+  the browser target"`. `SystemInfo.getInfo` is only available on
+  Chromium's browser-level CDP target, not the per-tab page target
+  `ChromiumKiosk.conn` is connected to (which is correct for everything
+  else - Page, Network, Runtime, Emulation). Added
+  `cdp_client.get_browser_websocket_url()` (from `/json/version`, distinct
+  from the page target list at `/json/list`) and
+  `CDPConnection.connect_browser()`; `get_gpu_info()` now opens its own
+  short-lived connection to that target instead of reusing `self.conn`.
+  Verified against a fake CDP server reproducing the exact two-target
+  split (page target rejects the call, browser target accepts it) before
+  shipping
+
 ## v1.4.9 - July 2026
 
 - Chromium's real GPU feature status (`gpu_compositing`, `rasterization`,
