@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.5
+# Version: 1.4.6
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.5"
+__version__ = "1.4.6"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -314,10 +314,16 @@ class ChromiumKiosk:
         if gl_mode == "software":
             args += ["--use-gl=angle", "--use-angle=swiftshader-webgl", "--disable-gpu-compositing"]
         else:
-            # --use-angle=gl-egl pins ANGLE's own EGL backend explicitly (rather than letting
-            # --use-gl=egl alone decide), which has proven more reliable on Mesa/V3D than
-            # leaving ANGLE to auto-select.
-            args += ["--use-gl=egl", "--use-angle=gl-egl", "--enable-gpu-rasterization", "--enable-zero-copy"]
+            # Deliberately NOT pinning --use-angle explicitly here. An earlier version pinned
+            # --use-angle=gl-egl, which is real but wrong: it makes ANGLE translate ES-style draw
+            # calls into *desktop* OpenGL over EGL. Raspberry Pi's V3D driver only natively
+            # implements OpenGL ES (no desktop GL), so that flag forced every single draw call
+            # through an unnecessary ES-to-desktop-GL translation shim - it didn't crash or fall
+            # back to software (so this looked like "hardware GL" in every log/status check), it
+            # just made GPU-heavy content (canvas/WebGL dashboard cards in particular) crawl at a
+            # couple of frames per second. Leaving --use-angle unset lets Chromium auto-select the
+            # right backend for the driver (gles-egl on V3D), matching working Pi kiosk configs.
+            args += ["--use-gl=egl", "--enable-gpu-rasterization", "--enable-zero-copy"]
         return args
 
     async def _launch_process(self) -> None:

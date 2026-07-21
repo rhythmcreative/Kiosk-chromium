@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.4.6 - July 2026
+
+- **Fix: real root cause of GPU-heavy content (canvas/WebGL animations)
+  rendering at ~2fps despite "hardware GL" mode reporting correctly.** The
+  v1.4.4 flag `--use-angle=gl-egl` was added believing it "pins ANGLE's EGL
+  backend more reliably" - that reasoning was wrong. `gl-egl` is a real
+  ANGLE backend value, but it means "translate ES-style draw calls into
+  **desktop OpenGL** via EGL". Raspberry Pi's V3D driver only natively
+  implements OpenGL ES (no desktop GL), so this flag forced every draw call
+  through an unnecessary ES-to-desktop-GL translation shim. It didn't crash
+  or trigger the software-GL fallback (so every diagnostic we'd built -
+  logs, `/kiosk_status` - correctly reported "hardware" mode, hiding the
+  actual problem), it just made GPU-heavy content crawl. Verified against
+  Chromium's actual `ui/gl/gl_switches.cc` source and real-world working
+  Raspberry Pi Chromium kiosk configs (none of which pin `--use-angle`
+  explicitly) before making this change, rather than guessing again.
+  Removed the flag entirely; Chromium's own backend auto-selection picks
+  the correct ANGLE backend for the driver instead
+
 ## v1.4.5 - July 2026
 
 - **Fix: permanently stuck on software (SwiftShader) GL rendering.** Once a
