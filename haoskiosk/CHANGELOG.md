@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.4.15 - July 2026
+
+- **Confirmed the hardware-GL fix (v1.4.12) works end to end**: a real
+  device now reports `renderer=ANGLE (Broadcom, V3D 7.1.10.2, OpenGL ES
+  3.1 Mesa 26.1.1)`, `gpu_compositing: enabled`, `webgl: enabled`
+- The v1.4.14 extension force-install only ever logged that we *asked*
+  Chromium to install Virtual Keyboard Plus, never whether it actually
+  succeeded - and since it's fetched fresh from the Chrome Web Store on
+  every single launch (`PROFILE_DIR` is wiped each time), that's a real
+  install that can fail for reasons outside this add-on's control (no
+  internet at that moment, this Chromium build lacking the Google API
+  keys the Web Store install flow needs, etc.). Added
+  `ChromiumKiosk.is_extension_installed()` (checks for a live
+  `chrome-extension://<id>/...` target via CDP's `Target.getTargets` -
+  direct proof, not inference) and a background check that polls for up
+  to 15s after startup and logs a clear confirmation or a specific,
+  actionable warning if it never loads
+
 ## v1.4.14 - July 2026
 
 - Added [Virtual Keyboard Plus](https://chromewebstore.google.com/detail/virtual-keyboard-plus/ecdaoooilnflogancccpapbeebbpkhoj)

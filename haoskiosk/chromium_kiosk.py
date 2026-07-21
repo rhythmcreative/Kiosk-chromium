@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.14
+# Version: 1.4.15
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.14"
+__version__ = "1.4.15"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -265,6 +265,30 @@ class ChromiumKiosk:
             "gl_renderer": gpu.get("auxAttributes", {}).get("glRenderer"),
             "gl_vendor": gpu.get("auxAttributes", {}).get("glVendor"),
         }
+
+    async def is_extension_installed(self, extension_id: str) -> bool | None:
+        """
+        Check via CDP's Target.getTargets whether an extension is actually loaded (i.e. has a
+        live background page/service worker target with a chrome-extension://<id>/ URL) - direct
+        proof one way or the other, rather than inferring it from us having written the install
+        policy (which only says we *asked* Chromium to install it, not that it succeeded: fetching
+        the extension from the Chrome Web Store needs a live, unblocked internet connection on
+        every single launch, since PROFILE_DIR - and any previously-installed extension - is wiped
+        every time). Returns None if the check itself couldn't be performed.
+        """
+        browser_conn: CDPConnection | None = None
+        try:
+            browser_conn = await CDPConnection.connect_browser(DEFAULT_CDP_HOST, DEFAULT_CDP_PORT)
+            result = await browser_conn.send("Target.getTargets", timeout=10.0)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("[is_extension_installed] Target.getTargets failed: %s", e)
+            return None
+        finally:
+            if browser_conn is not None:
+                with suppress(Exception):
+                    await browser_conn.close()
+        prefix = f"chrome-extension://{extension_id}/"
+        return any(t.get("url", "").startswith(prefix) for t in result.get("targetInfos", []))
 
     # ------------------------------------------------------------------ #
     # Public control API (used by rest_server.py / gestures)
@@ -625,6 +649,30 @@ class ChromiumKiosk:
                         gpu_info.get("gl_renderer"), gpu_info.get("gl_vendor"), gpu_info.get("feature_status"))
         else:
             logger.warning("Could not retrieve Chromium GPU status (SystemInfo.getInfo failed)")
+
+        if self.onscreen_keyboard:
+            # Installing the force-installed extension takes a moment (fetched fresh from the
+            # Chrome Web Store on every launch, since PROFILE_DIR is wiped each time) - check in
+            # the background rather than delaying startup, and log a definitive yes/no instead of
+            # only ever knowing that we *asked* Chromium to install it.
+            asyncio.create_task(self._check_virtual_keyboard_extension())
+
+    async def _check_virtual_keyboard_extension(self) -> None:
+        for attempt in range(15):
+            await asyncio.sleep(1)
+            installed = await self.is_extension_installed(VIRTUAL_KEYBOARD_EXTENSION_ID)
+            if installed:
+                logger.info("Virtual Keyboard Plus extension confirmed loaded (after %ds)", attempt + 1)
+                return
+            if installed is None:
+                return  # Check itself failed (e.g. no CDP connection anymore) - not worth retrying
+        logger.warning(
+            "Virtual Keyboard Plus extension (%s) did not load within 15s of startup - ONSCREEN_KEYBOARD "
+            "is enabled but the force-install policy doesn't seem to have taken effect. Common causes: no "
+            "internet access from the container at startup, or this Chromium build lacking the Google API "
+            "keys the Chrome Web Store install flow needs (a known limitation of some distro/community "
+            "Chromium builds, unrelated to anything this add-on controls).", VIRTUAL_KEYBOARD_EXTENSION_ID,
+        )
 
     # ------------------------------------------------------------------ #
     # CDP event handlers (sync callbacks that schedule async work)
