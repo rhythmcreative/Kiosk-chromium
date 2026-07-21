@@ -72,7 +72,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -957,8 +957,13 @@ async def main() -> None:
         KIOSK = ChromiumKiosk()
         await KIOSK.start()
 
-    # Wait for SIGTERM/SIGINT (e.g. container stop) so Chromium can be torn down cleanly
-    # rather than left as an orphaned grandchild process of run.sh.
+    # Wait for either SIGTERM/SIGINT (e.g. container stop) or the kiosk controller giving up
+    # permanently (repeated Chromium crashes it couldn't recover from) - whichever comes first -
+    # so Chromium can be torn down cleanly rather than left as an orphaned grandchild of run.sh.
+    #
+    # run.sh waits on *this process* exiting to know when to stop (rather than independently
+    # polling for a browser process by name, e.g. via pgrep), since this process is the one
+    # actually driving Chromium and definitively knows whether it's healthy.
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -969,7 +974,16 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _request_stop, sig.name)
 
-    await stop_event.wait()
+    waiters = [asyncio.create_task(stop_event.wait())]
+    if KIOSK is not None:
+        waiters.append(asyncio.create_task(KIOSK.gave_up.wait()))
+
+    _, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+
+    if KIOSK is not None and KIOSK.gave_up.is_set():
+        logging.error("Chromium kiosk controller gave up permanently - exiting")
 
     if KIOSK is not None:
         await KIOSK.stop()

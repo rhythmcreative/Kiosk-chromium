@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.2
+# Version: 1.4.3
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,9 +46,9 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
-CHROMIUM_BIN = "chromium"  # Resolved via PATH so 'pgrep -f "^chromium "' in run.sh's wait loop matches argv[0]
+CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
 
 HARD_RELOAD_FREQ = 10   # Every Nth periodic refresh also bypasses cache (mirrors old userconf.lua)
@@ -147,6 +147,10 @@ class ChromiumKiosk:
         self._force_software_gl = False  # Set once hardware GL is observed to crash post-startup
         self._active_gl_mode: str | None = None
         self._stopping = False
+        # Set when the restart-rate-limiter gives up permanently (see _restart_browser). rest_server.py
+        # waits on this so the REST server process itself exits promptly - run.sh in turn just waits
+        # on that process, rather than independently polling for a browser process by name.
+        self.gave_up = asyncio.Event()
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -401,9 +405,10 @@ class ChromiumKiosk:
             if len(self._restart_timestamps) >= MAX_RESTARTS_PER_WINDOW:
                 logger.error(
                     "GIVING UP: Chromium restarted %d times in the last %ds (%s) - not retrying again. "
-                    "run.sh will detect no browser process and exit, letting the add-on restart fresh.",
+                    "Exiting so the add-on can restart fresh.",
                     len(self._restart_timestamps), RESTART_WINDOW_SECONDS, reason,
                 )
+                self.gave_up.set()
                 return
             self._restart_timestamps.append(now)
 

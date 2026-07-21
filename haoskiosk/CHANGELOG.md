@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.4.3 - July 2026
+
+- **Fix:** despite the v1.4.2 CDP health-check backstop, a real deployment
+  still hit the add-on exiting a few seconds after Chromium started - with
+  *neither* crash-detection path (process-exit watchdog or health check)
+  ever logging anything. That, combined with the consistent ~8-9s timing
+  across multiple attempts regardless of Chromium-side changes, points at
+  `run.sh`'s own `pgrep -f "^chromium "` polling loop being the unreliable
+  part, not Chromium itself.
+- Removed that pgrep-based polling entirely. `run.sh` now simply waits on
+  the PID of the REST server process (`wait "$REST_SERVER_PID"`), which is
+  the component that actually drives Chromium and already knows
+  authoritatively whether it's healthy. `chromium_kiosk.py` exposes a new
+  `gave_up` event, set only when the restart-rate-limiter permanently gives
+  up; `rest_server.py`'s `main()` now exits on whichever comes first of
+  SIGTERM or that event, so `run.sh` finds out immediately and directly
+  instead of inferring it indirectly through process-name polling.
+
 ## v1.4.2 - July 2026
 
 - **Fix:** the v1.4.1 crash-recovery watchdog relied solely on

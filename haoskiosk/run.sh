@@ -3,7 +3,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.4.2
+# Version: 1.4.3
 # Copyright Jeff Kosowsky
 # Date: July 2026
 #
@@ -633,6 +633,7 @@ python3 -u /mouse_touch_inputs.py  -d 1 -w "$COMMAND_WHITELIST" &
 #### Start  HAOSKiosk REST server
 bashio::log.info "Starting HAOSKiosk REST server..."
 python3 -u /rest_server.py &
+REST_SERVER_PID=$!
 
 #### Optionally start vnc server
 if [ -n "$VNC_SERVER" ]; then
@@ -663,19 +664,16 @@ if [ -n "$VNC_SERVER" ]; then
     x11vnc $X11VNC_OPTS 2> >(grep -v 'The VNC desktop is:' >&2)
 fi
 
-#### Wait for the $BROWSER process (launched by rest_server.py) to exit, or sleep in debug mode
+#### Wait for the REST server (which owns Chromium's whole lifecycle, including crash detection
+#### and recovery) to exit, or sleep in debug mode.
+#### NOTE: deliberately *not* polling for a '$BROWSER' process by name here (e.g. via pgrep) -
+#### that was tried and proved unreliable: it repeatedly declared no browser process running
+#### (and killed the whole add-on) while Chromium was in fact still healthy and responding fine
+#### over CDP, per rest_server.py's own health checks. Waiting on the actual PID of the process
+#### that manages Chromium directly is both simpler and authoritative.
 if [ "$DEBUG_MODE" != true ]; then
-    count=0
-    while true; do  # Wait for all browser processes to exit
-        if pgrep -f -- "^$BROWSER " > /dev/null 2>&1; then
-            count=0
-        else
-            count=$((count + 1))
-        fi
-        [ $count -ge 3 ] && break # Exit if no browser process for at least 2*5=10 seconds
-        sleep 5
-    done
-    bashio::log.info "No $BROWSER instances remaining... exiting 'run.sh'..."
+    wait "$REST_SERVER_PID"
+    bashio::log.info "HAOSKiosk REST server exited... exiting 'run.sh'..."
 
 else  ### Debug mode
     bashio::log.info "Entering debug mode (X & $WINMGR window manager but no $BROWSER browser)..."
