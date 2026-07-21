@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.8
+# Version: 1.4.9
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.8"
+__version__ = "1.4.9"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -535,6 +535,19 @@ class ChromiumKiosk:
         self.conn.on("Page.frameNavigated", self._on_frame_navigated)
         self.conn.on("Page.loadEventFired", self._on_load_event)
         self.conn.on("Network.loadingFailed", self._on_loading_failed)
+
+        # Log Chromium's own authoritative GPU status right away - the same data chrome://gpu
+        # reads from - so it shows up automatically in the add-on log without needing a separate
+        # GET /kiosk_status call. Our own hardware/software GL-mode tracking only reflects which
+        # launch flags we used and whether the process stayed up, not whether GPU compositing/
+        # rasterization/WebGL are actually active end to end, which is what actually determines
+        # animation performance for canvas/WebGL-heavy dashboard content.
+        gpu_info = await self.get_gpu_info()
+        if gpu_info:
+            logger.info("Chromium GPU status: renderer=%s vendor=%s feature_status=%s",
+                        gpu_info.get("gl_renderer"), gpu_info.get("gl_vendor"), gpu_info.get("feature_status"))
+        else:
+            logger.warning("Could not retrieve Chromium GPU status (SystemInfo.getInfo failed)")
 
     # ------------------------------------------------------------------ #
     # CDP event handlers (sync callbacks that schedule async work)

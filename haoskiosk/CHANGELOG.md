@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.9 - July 2026
+
+- Chromium's real GPU feature status (`gpu_compositing`, `rasterization`,
+  `webgl`, GPU renderer/vendor - same data `chrome://gpu` reads from) is
+  now logged automatically right after startup, instead of only being
+  available via a separate `GET /kiosk_status` call. Pasting the add-on's
+  regular startup log is now enough to see whether GPU acceleration is
+  actually active, without needing a way to run `curl` against the add-on
+  (not always straightforward to do from HAOS)
+
 ## v1.4.8 - July 2026
 
 - **Fix:** the `[ha_settings] Failed to evaluate JS: ... Inspected target
