@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.4.17 - July 2026
+
+- **Fix: the onscreen keyboard never popped up when tapping a text field**
+  (the actual root cause, diagnosed on a live device rather than inferred
+  from symptoms). Onboard's auto-show - the only way the keyboard ever
+  appears by itself - works by watching AT-SPI for a focused editable
+  node. Chromium *does* register on the AT-SPI bus, which is why every
+  check we'd built so far looked healthy, but without
+  `--force-renderer-accessibility` it exposes only its own browser UI:
+  the entire renderer-side tree is absent, so every text field on the
+  dashboard is invisible to accessibility clients and nothing Onboard
+  watches ever changes. Walking the AT-SPI tree from Chromium's
+  application node on the running add-on returned exactly one `[frame]`
+  whose children were all null. Added the flag (only when
+  `ONSCREEN_KEYBOARD` is enabled - maintaining the renderer a11y tree
+  costs CPU/memory on every DOM update, not worth paying otherwise).
+  Verified end-to-end on the device: with the flag, Onboard logs the
+  focused node as `role=ENTRY state=[EDITABLE, FOCUSED, ...]` and the
+  keyboard auto-shows immediately over the fullscreen kiosk window.
+  This is what Luakit gave us for free upstream - GTK apps expose their
+  a11y tree through the ATK bridge by default - and what silently went
+  missing in the switch to Chromium
+- **Corrects the v1.4.4 note** claiming AT-SPI-based auto-show wasn't
+  feasible because "Alpine only packages the AT-SPI registry daemon, not
+  the GTK/ATK bridge". That was wrong: `libatk-bridge-2.0` is present and
+  the accessibility bus (`at-spi-bus-launcher`, `at-spi2-registryd`) is
+  already running fine inside the add-on container - the missing piece
+  was always on Chromium's side. The v1.4.4 Openbox `above`-layer rule is
+  still correct and still needed (confirmed by screenshot: without it the
+  keyboard would render below the `--kiosk` window); it just wasn't
+  sufficient on its own
+
 ## v1.4.16 - July 2026
 
 - Reverted the Virtual Keyboard Plus extension force-install (v1.4.14,

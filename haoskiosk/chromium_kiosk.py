@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.16
+# Version: 1.4.17
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.16"
+__version__ = "1.4.17"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -352,6 +352,23 @@ class ChromiumKiosk:
             "--disable-site-isolation-trials",
             "--renderer-process-limit=1",
         ]
+        if self.onscreen_keyboard:
+            # Onboard's auto-show (pop the keyboard up when a text field is focused, the only way
+            # it ever appears on its own) works by watching AT-SPI for a focused editable node.
+            # Chromium registers itself on the AT-SPI bus regardless, but *without* this flag it
+            # only ever exposes its own browser UI - the entire renderer-side tree, i.e. every
+            # text field on the page, is simply absent from the accessibility tree, so nothing an
+            # AT can observe ever changes when you tap an input in the dashboard and Onboard
+            # stays hidden. Verified on a real device: with the flag, Onboard logs the focused
+            # node as role=ENTRY state=[EDITABLE, FOCUSED, ...] and auto-shows immediately;
+            # without it, walking the AT-SPI tree from Chromium's application node yields only a
+            # [frame] whose children are all null. This is what Luakit gave us for free upstream
+            # (GTK apps expose their a11y tree via the ATK bridge by default) and what silently
+            # went missing in the switch to Chromium.
+            # Only set when the onscreen keyboard is actually enabled: maintaining the renderer
+            # a11y tree costs real CPU/memory on every DOM update, which is not worth paying on a
+            # constrained board for a kiosk that has no use for it.
+            args.append("--force-renderer-accessibility")
         if gl_mode == "software":
             args += ["--use-gl=angle", "--use-angle=swiftshader-webgl", "--disable-gpu-compositing"]
         else:

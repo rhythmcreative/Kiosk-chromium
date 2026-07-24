@@ -211,6 +211,12 @@ dragging along the keyboard edges.
 You can manually toggle keyboard visibility on/off by tapping extreme top
 right of screen or triple-clicing.
 
+Note (Chromium-specific): the keyboard pops up automatically because Onboard
+watches AT-SPI for a focused text field, and Chromium only exposes the page's
+accessibility tree when launched with `--force-renderer-accessibility`. This
+add-on sets that flag automatically whenever `onscreen_keyboard` is enabled
+(and omits it otherwise, since maintaining that tree has a CPU/memory cost).
+
 See https://github.com/dr-ni/onboard for more details
 
 ### Save Onscreen Config
