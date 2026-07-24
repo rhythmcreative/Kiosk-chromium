@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.17
+# Version: 1.4.18
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.17"
+__version__ = "1.4.18"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -351,6 +351,19 @@ class ChromiumKiosk:
             # the kind of constrained boards this add-on typically runs on.
             "--disable-site-isolation-trials",
             "--renderer-process-limit=1",
+            # Skia's GPU-accelerated Canvas2D backend miscompiles some composite operations on the
+            # kind of GPUs these boards ship (verified on a Raspberry Pi's V3D through ANGLE):
+            # a path built from zero-radius arcs plus a ~358-degree sweep, filled under
+            # globalCompositeOperation='destination-out', erases far more than the path covers.
+            # Real-world victim: the Material You panel's colour disk, which builds its wheel by
+            # accumulating 360 two-degree wedges cut out exactly that way - it renders as a
+            # handful of stray radial lines instead of a colour wheel. Confirmed by reading the
+            # canvas back with toDataURL (the pixels are already wrong before compositing) and by
+            # re-running the same drawing code on the device under different flags: broken with
+            # --use-gl=angle alone, byte-identical to the software renderer once Canvas2D
+            # acceleration is off. Only Canvas2D goes back to the CPU here; GPU compositing,
+            # rasterization and WebGL all stay hardware-accelerated.
+            "--disable-accelerated-2d-canvas",
         ]
         if self.onscreen_keyboard:
             # Onboard's auto-show (pop the keyboard up when a text field is focused, the only way

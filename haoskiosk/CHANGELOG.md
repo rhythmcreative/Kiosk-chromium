@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.4.18 - July 2026
+
+- **Fix: canvas graphics silently rendering wrong (not just slowly).**
+  Skia's GPU-accelerated Canvas2D backend miscompiles some composite
+  operations on the GPUs these boards ship with - verified on a Raspberry
+  Pi's V3D through ANGLE: a path built from zero-radius arcs plus a
+  ~358-degree sweep, filled under
+  `globalCompositeOperation = 'destination-out'`, erases far more than the
+  path actually covers. Real-world victim: the Material You panel's colour
+  disk, which builds its wheel by accumulating 360 two-degree wedges cut
+  out exactly that way - it rendered as a handful of stray radial lines
+  instead of a colour wheel. Diagnosed by reading the canvas back with
+  `toDataURL` (the pixels are already wrong before compositing ever
+  happens, ruling out a display/layering issue) and then re-running the
+  exact same drawing code on the device under different flags: broken with
+  `--use-gl=angle` alone, byte-identical to the software renderer once
+  Canvas2D acceleration is off. Added `--disable-accelerated-2d-canvas`.
+  Only Canvas2D moves back to the CPU - GPU compositing, rasterization and
+  WebGL all stay hardware-accelerated, so the v1.4.1/v1.4.6/v1.4.12 GPU
+  work is unaffected. The trade-off is that canvas-heavy content (HA's
+  history charts) is painted on the CPU, which is a fair price for not
+  silently drawing the wrong thing
+
 ## v1.4.17 - July 2026
 
 - **Fix: the onscreen keyboard never popped up when tapping a text field**
