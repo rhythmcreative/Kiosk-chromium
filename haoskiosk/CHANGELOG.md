@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.4.20 - July 2026
+
+- **Fix: `browser_language` didn't change `navigator.language`.** Verified on a
+  real device: `Emulation.setLocaleOverride` only changes
+  `Intl.*.resolvedOptions().locale` on this Chromium build - `navigator.language`
+  and `navigator.languages` stayed whatever Chromium's untouched default was,
+  even immediately after a full `ignoreCache` reload. Home Assistant's own UI
+  language (`hass.language`) is unaffected by this - it comes from the logged-in
+  user's profile/localStorage, not `navigator.language` - so HA dashboards
+  already displayed correctly in the configured language; this only mattered
+  for other sites opened through the kiosk (e.g. the `Open Google search`
+  gesture command), which typically *do* read `navigator.language` directly.
+  Added a `navigator`/`navigator.languages` override via
+  `Object.defineProperty` on `Navigator.prototype`, injected with
+  `Page.addScriptToEvaluateOnNewDocument` (same mechanism already used for the
+  error-suppression and websocket-recovery scripts) so it's guaranteed to run
+  before any page script, on every navigation
+
 ## v1.4.19 - July 2026
 
 - **New: `browser_language` option to choose the Chromium/HA frontend

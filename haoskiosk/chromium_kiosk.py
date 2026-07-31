@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.19
+# Version: 1.4.20
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.19"
+__version__ = "1.4.20"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -633,11 +633,16 @@ class ChromiumKiosk:
             # --lang (in _build_args) picks which locale Chromium's own UI/spellchecker uses, but
             # doesn't reliably reach page-visible signals in every Chromium build. Belt-and-suspenders
             # it here at the CDP level, which is what actually determines the language Home
-            # Assistant's frontend auto-detects (it reads navigator.language/Intl and falls back to
-            # Accept-Language, whenever the user hasn't picked a language in their own HA profile):
-            #   - Emulation.setLocaleOverride: navigator.language / Intl.*.resolvedOptions().locale
+            # Assistant's frontend auto-detects (it reads navigator.language/Accept-Language,
+            # whenever the user hasn't picked a language in their own HA profile):
+            #   - Emulation.setLocaleOverride: Intl.*.resolvedOptions().locale / date-time formatting
             #   - Network.setExtraHTTPHeaders: the Accept-Language header sent with every request
-            # Both are process-wide overrides (unlike Page.navigate), so - like the dark-mode
+            #   - The injected script below (registered with the other on-new-document scripts):
+            #     navigator.language / navigator.languages, which - verified on a real device -
+            #     Emulation.setLocaleOverride does *not* actually touch on this Chromium build (only
+            #     Intl.* changed; navigator.language stayed whatever Chromium's untouched default
+            #     was, even across a full ignoreCache reload)
+            # All are process-wide overrides (unlike Page.navigate), so - like the dark-mode
             # emulation above - they're set once here and apply to every subsequent navigation/
             # reload, not just the current page.
             with suppress(Exception):
@@ -647,7 +652,10 @@ class ChromiumKiosk:
                                       {"headers": {"Accept-Language": self._accept_language_header()}})
 
         # Scripts that must run before every page's own scripts (persist across reloads/navigations)
-        for script in (self._suppress_errors_js(), self._ws_recovery_js()):
+        scripts = [self._suppress_errors_js(), self._ws_recovery_js()]
+        if self.browser_language:
+            scripts.append(self._locale_spoof_js())
+        for script in scripts:
             await self.conn.send("Page.addScriptToEvaluateOnNewDocument", {"source": script})
 
         self.conn.on("Page.frameNavigated", self._on_frame_navigated)
@@ -666,6 +674,29 @@ class ChromiumKiosk:
                         gpu_info.get("gl_renderer"), gpu_info.get("gl_vendor"), gpu_info.get("feature_status"))
         else:
             logger.warning("Could not retrieve Chromium GPU status (SystemInfo.getInfo failed)")
+
+    def _locale_spoof_js(self) -> str:
+        """Override navigator.language/navigator.languages via a defineProperty on Navigator.prototype,
+        injected before any page script runs (Page.addScriptToEvaluateOnNewDocument). Needed because
+        Emulation.setLocaleOverride - confirmed on a real device - does not actually change these two
+        properties on this Chromium build (only Intl.*.resolvedOptions() changed), even immediately
+        after a full ignoreCache reload. Most sites, including Home Assistant's own initial-load auto-
+        detection, read navigator.language directly rather than going through Intl."""
+        lang = self.browser_language
+        base = lang.split("-")[0]
+        langs = [lang, base] if base != lang else [lang]
+        return f"""
+            (function() {{
+                try {{
+                    Object.defineProperty(Navigator.prototype, 'language', {{
+                        get: function() {{ return {json.dumps(lang)}; }}, configurable: true
+                    }});
+                    Object.defineProperty(Navigator.prototype, 'languages', {{
+                        get: function() {{ return Object.freeze({json.dumps(langs)}); }}, configurable: true
+                    }});
+                }} catch (e) {{ console.warn('Failed to override navigator.language:', e); }}
+            }})();
+        """
 
     def _accept_language_header(self) -> str:
         """Build a quality-weighted Accept-Language value from the configured locale, e.g.
