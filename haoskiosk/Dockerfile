@@ -1,7 +1,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: Dockerfile
-# Version: 1.4.18
+# Version: 1.4.21
 # Copyright Jeff Kosowsky
 # Date: July 2026
 ################################################################################
@@ -69,6 +69,7 @@ RUN apk update && apk add --no-cache \
    && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/community \
         chromium \
         chromium-swiftshader \
+        chromium-lang \
    && rm -rf /var/cache/apk/*
 
 #===============================================================================

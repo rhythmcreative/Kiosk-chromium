@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.21 - July 2026
+
+- **Fix: `browser_language` had no effect on Chromium's own native UI**
+  (dialogs like the "Save password?" prompt, spell-checker, etc.) - only on
+  web-page content. Root cause, confirmed inside the running container: the
+  Alpine `chromium` package ships **only the `en-US` locale** -
+  `/usr/lib/chromium/locales/` had a single `en-US.pak` and nothing else, so
+  `--lang=es-ES` had no other locale data to load and silently fell back to
+  English for every native string, regardless of the configured
+  `browser_language`. Added the separate `chromium-lang` Alpine package
+  (kept version-pinned alongside `chromium`/`chromium-swiftshader` on the
+  same `v3.21/community` repo), which provides the full set of locale
+  `.pak` files Chromium ships upstream
+
 ## v1.4.20 - July 2026
 
 - **Fix: `browser_language` didn't change `navigator.language`.** Verified on a
