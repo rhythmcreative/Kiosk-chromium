@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.4.19 - July 2026
+
+- **New: `browser_language` option to choose the Chromium/HA frontend
+  language.** Previously there was no way to control the displayed
+  language at all - `keyboard_layout`'s "and language" wording was
+  aspirational only: it sets the xkb key layout and (via `run.sh`)
+  exports `LANG` to that same keyboard code (e.g. `LANG=us`), which isn't
+  a real locale and has no effect on Chromium or HA's displayed language.
+  Added a real `browser_language` config option (BCP-47 code, e.g.
+  `es-ES`, `fr`, `pt-BR`; blank = Chromium's default `en-US`) that:
+  launches Chromium with `--lang=<code>` (drives its own UI/spellchecker
+  locale); overrides the subprocess `LANGUAGE` env var so it can't be
+  shadowed by the unrelated keyboard-layout-derived `LANG`; and, over
+  CDP, applies `Emulation.setLocaleOverride` (`navigator.language`/`Intl`)
+  plus a matching `Accept-Language` header via
+  `Network.setExtraHTTPHeaders` - together, what Home Assistant's own
+  frontend auto-detection reads whenever the user hasn't set a language
+  on their HA profile. Applied once per Chromium session (initial connect
+  and after every restart), consistent with how dark-mode emulation is
+  already handled
+
 ## v1.4.18 - July 2026
 
 - **Fix: canvas graphics silently rendering wrong (not just slowly).**

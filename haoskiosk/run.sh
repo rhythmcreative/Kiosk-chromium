@@ -3,7 +3,7 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: run.sh
-# Version: 1.4.18
+# Version: 1.4.19
 # Copyright Jeff Kosowsky
 # Date: July 2026
 #
@@ -24,6 +24,7 @@
 #         ROTATE_DISPLAY
 #         MAP_TOUCH_INPUTS
 #         CURSOR_TIMEOUT
+#         BROWSER_LANGUAGE
 #         KEYBOARD_LAYOUT
 #         ONSCREEN_KEYBOARD
 #         SAVE_ONSCREEN_CONFIG
@@ -140,6 +141,7 @@ load_config_var HA_SIDEBAR "none"
 load_config_var ROTATE_DISPLAY normal
 load_config_var MAP_TOUCH_INPUTS true
 load_config_var CURSOR_TIMEOUT 5  # Default to 5 seconds
+load_config_var BROWSER_LANGUAGE ""  # Consumed by chromium_kiosk.py (Chromium --lang + CDP locale override)
 load_config_var KEYBOARD_LAYOUT us
 load_config_var ONSCREEN_KEYBOARD false
 load_config_var SAVE_ONSCREEN_CONFIG true

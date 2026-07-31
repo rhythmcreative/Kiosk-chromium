@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.18
+# Version: 1.4.19
 # Copyright Jeff Kosowsky
 # Date: July 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.18"
+__version__ = "1.4.19"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -126,10 +126,20 @@ class ChromiumKiosk:
             theme = f'"{theme}"'
         self.theme_js_value = theme
 
+        # BCP-47 locale (e.g. "es-ES", "fr", "pt-BR") for both Chromium itself (--lang, and thus
+        # which locale .pak file it loads) and the page content Home Assistant sees (CDP locale
+        # override + Accept-Language, so HA's own "auto" frontend-language detection - which reads
+        # navigator.language/Accept-Language whenever the user hasn't picked a language in their HA
+        # profile - matches rather than silently falling back to Chromium's compiled-in en-US).
+        # Accept a common user typo (underscore instead of hyphen, e.g. "es_ES") rather than
+        # silently failing to apply the requested language.
+        self.browser_language = (os.getenv("BROWSER_LANGUAGE") or "").strip().replace("_", "-")
+
         logger.info(
-            "ChromiumKiosk config: URL=%s DARK_MODE=%s SIDEBAR=%s THEME=%s LOGIN_DELAY=%.1f "
+            "ChromiumKiosk config: URL=%s DARK_MODE=%s SIDEBAR=%s THEME=%s LANGUAGE=%s LOGIN_DELAY=%.1f "
             "ZOOM_LEVEL=%d BROWSER_REFRESH=%d ONSCREEN_KEYBOARD=%s",
             self.initial_url, self.dark_mode, raw_sidebar, theme or "(none)",
+            self.browser_language or "(default)",
             self.login_delay, self.zoom_level, self.browser_refresh, self.onscreen_keyboard,
         )
 
@@ -365,6 +375,12 @@ class ChromiumKiosk:
             # rasterization and WebGL all stay hardware-accelerated.
             "--disable-accelerated-2d-canvas",
         ]
+        if self.browser_language:
+            # Selects which locale .pak file Chromium loads (its own UI strings, spellchecker,
+            # etc). Also the initial signal Chromium uses to seed Accept-Language/navigator.language
+            # before our CDP-level overrides (Emulation.setLocaleOverride + Network.setExtraHTTPHeaders,
+            # applied in _connect_cdp) take effect on every page load.
+            args.append(f"--lang={self.browser_language}")
         if self.onscreen_keyboard:
             # Onboard's auto-show (pop the keyboard up when a text field is focused, the only way
             # it ever appears on its own) works by watching AT-SPI for a focused editable node.
@@ -401,6 +417,16 @@ class ChromiumKiosk:
             args += ["--use-gl=angle", "--enable-gpu-rasterization", "--enable-zero-copy"]
         return args
 
+    def _chromium_env(self) -> dict[str, str]:
+        """Environment for the Chromium subprocess. run.sh sets LANG from KEYBOARD_LAYOUT (a
+        keyboard code, e.g. 'us'/'de', not a real locale) purely for xkb's own benefit, so when a
+        real BROWSER_LANGUAGE is configured, override LANGUAGE here (gettext/ICU consult it before
+        LANG) so nothing in Chromium picks up that bogus inherited value instead."""
+        env = os.environ.copy()
+        if self.browser_language:
+            env["LANGUAGE"] = self.browser_language
+        return env
+
     async def _launch_process(self) -> None:
         gl_modes = ("software",) if self._force_software_gl else ("hardware", "software")
         for gl_mode in gl_modes:
@@ -413,6 +439,7 @@ class ChromiumKiosk:
                 CHROMIUM_BIN, *args,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                env=self._chromium_env(),
             )
             # Chromium's own diagnostics (EGL/GBM/Mesa/GPU-process errors in particular) go to
             # stderr. A GPU-process init failure doesn't necessarily crash the whole browser or
@@ -602,6 +629,23 @@ class ChromiumKiosk:
             "features": [{"name": "prefers-color-scheme", "value": "dark" if self.dark_mode else "light"}]
         })
 
+        if self.browser_language:
+            # --lang (in _build_args) picks which locale Chromium's own UI/spellchecker uses, but
+            # doesn't reliably reach page-visible signals in every Chromium build. Belt-and-suspenders
+            # it here at the CDP level, which is what actually determines the language Home
+            # Assistant's frontend auto-detects (it reads navigator.language/Intl and falls back to
+            # Accept-Language, whenever the user hasn't picked a language in their own HA profile):
+            #   - Emulation.setLocaleOverride: navigator.language / Intl.*.resolvedOptions().locale
+            #   - Network.setExtraHTTPHeaders: the Accept-Language header sent with every request
+            # Both are process-wide overrides (unlike Page.navigate), so - like the dark-mode
+            # emulation above - they're set once here and apply to every subsequent navigation/
+            # reload, not just the current page.
+            with suppress(Exception):
+                await self.conn.send("Emulation.setLocaleOverride", {"locale": self.browser_language})
+            with suppress(Exception):
+                await self.conn.send("Network.setExtraHTTPHeaders",
+                                      {"headers": {"Accept-Language": self._accept_language_header()}})
+
         # Scripts that must run before every page's own scripts (persist across reloads/navigations)
         for script in (self._suppress_errors_js(), self._ws_recovery_js()):
             await self.conn.send("Page.addScriptToEvaluateOnNewDocument", {"source": script})
@@ -622,6 +666,16 @@ class ChromiumKiosk:
                         gpu_info.get("gl_renderer"), gpu_info.get("gl_vendor"), gpu_info.get("feature_status"))
         else:
             logger.warning("Could not retrieve Chromium GPU status (SystemInfo.getInfo failed)")
+
+    def _accept_language_header(self) -> str:
+        """Build a quality-weighted Accept-Language value from the configured locale, e.g.
+        'es-ES' -> 'es-ES,es;q=0.9', so a region-specific choice still credibly offers its base
+        language as a fallback instead of just the one exact tag."""
+        lang = self.browser_language
+        base = lang.split("-")[0]
+        if base and base != lang:
+            return f"{lang},{base};q=0.9"
+        return lang
 
     # ------------------------------------------------------------------ #
     # CDP event handlers (sync callbacks that schedule async work)

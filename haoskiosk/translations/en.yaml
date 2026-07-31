@@ -69,9 +69,18 @@ configuration:
       Time in seconds for cursor to re-hide after last mouse movement
       or touch. Set to '0' to always show cursor. Set to '-1' to never
       show cursor. [Default: 5 seconds]
+  browser_language:
+    name: "Browser Language"
+    description: |
+      Language/locale for the Chromium browser and Home Assistant frontend,
+      as a BCP-47 code (e.g. "en-US", "es", "es-ES", "fr", "de", "pt-BR",
+      "zh-CN"). Leave blank to use Chromium's built-in default (en-US)
+      [Default: ""]
+      Note: This is independent of "Keyboard Layout" below, which only
+      affects physical key mapping, not displayed language.
   keyboard_layout:
     name: "Keyboard Layout"
-    description: "Set the keyboard layout and language [Default: us]"
+    description: "Set the keyboard layout [Default: us]"
   onscreen_keyboard:
     name: "Onscreen Keyboard"
     description: "Display an Onscreen Keyboard for text input [Default: True]"

@@ -4,7 +4,7 @@ description: |
   Start X server and Chromium browser on local HAOS server and display
   dashboards in kiosk mode. Fork of HAOS-kiosk by Jeff Kosowsky, adapted to
   drive regular Chromium via the Chrome DevTools Protocol instead of Luakit.
-version: "1.4.18"
+version: "1.4.19"
 slug: "haoskiosk"
 url: https://github.com/rhythmcreative/Kiosk-chromium/tree/main/haoskiosk
 
@@ -89,6 +89,7 @@ options:
   ha_sidebar: "none"
   rotate_display: "normal"
   map_touch_inputs: true
+  browser_language: ""
   keyboard_layout: us
   cursor_timeout: 5
   onscreen_keyboard: true
@@ -130,6 +131,7 @@ schema:
   rotate_display: list(normal|left|right|inverted)
   map_touch_inputs: bool
   cursor_timeout: int
+  browser_language: str?
   keyboard_layout: str
   onscreen_keyboard: bool
   save_onscreen_config: bool

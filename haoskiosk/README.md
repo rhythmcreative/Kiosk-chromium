@@ -195,9 +195,31 @@ Cursor will reappear when mouse moved or screen touched again. Set to `0`
 to *always* show cursor. Set to `-1` to *never* show cursor. (Default: 5
 seconds)
 
+### Browser Language
+
+Set the language/locale used by the Chromium browser and, in turn, by the
+Home Assistant frontend (auto-detected browser language) — as a BCP-47
+locale code such as `en-US`, `es`, `es-ES`, `fr`, `de`, `pt-BR`, `it`,
+`nl`, `pl`, `zh-CN`. Leave blank to use Chromium's built-in default
+(`en-US`). (Default: `""`)
+
+This affects:
+
+- Chromium's own UI strings and spell-checker (via `--lang`)
+- `navigator.language` / `Intl` results as seen by any page JavaScript
+- The `Accept-Language` HTTP header sent with every request
+- Home Assistant's own frontend language, *unless* a language has been
+  explicitly set on the logged-in user's HA profile (Settings → your
+  user profile → Language), which always takes priority over the
+  browser's language
+
+NOTE: This is independent of "Keyboard Layout" below, which only affects
+physical key mapping (which characters keys produce), not any displayed
+language.
+
 ### Keyboard Layout
 
-Set the keyboard layout and language. (Default: us)
+Set the keyboard layout. (Default: us)
 
 ### Onscreen Keyboard
 
