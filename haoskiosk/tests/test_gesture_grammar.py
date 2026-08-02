@@ -124,6 +124,8 @@ VALID_GESTURE_KEYS = [
     "2+_Finger_1_Swipe_down",
     "1_ANY_2-_CLICKTAP",
     "1+_ANY_1+_ANY",
+    "2_TOUCH_1_DRAG_LEFT",  # Directional DRAG - see DeviceType.TOUCH's gestures dict
+    "3_TOUCH_1_SWIPE",      # Undirected SWIPE - wildcard for the directional variants
 ]
 
 INVALID_GESTURE_KEYS = [
@@ -149,20 +151,25 @@ def test_invalid_gesture_keys_raise(key):
         GestureCommand._parse_gesture_key(key)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "README documents '2_TOUCH_1_DRAG_LEFT' as a valid example ('Both DRAG and SWIPE may "
-    "include suffixes _LEFT/_RIGHT/_UP/_DOWN'), but TOUCH's DeviceSpec.gestures dict (unlike "
-    "SWIPE) has no DRAG_LEFT/DRAG_RIGHT/DRAG_UP/DRAG_DOWN entries, and MOUSE's doesn't either - "
-    "so no directional DRAG gesture string can currently parse for any device. Flagged here "
-    "rather than silently skipped so this is caught if the underlying grammar changes; fixing "
-    "it for real means adding those gesture-name entries to the relevant DeviceSpec(s) and "
-    "verifying gesture classification agrees, which needs owner/hardware sign-off."
-))
-def test_documented_directional_drag_currently_unsupported():
-    GestureCommand._parse_gesture_key("2_TOUCH_1_DRAG_LEFT")
-
-
 class TestGestureKeyDetails:
+    def test_directional_drag_parses_for_touch(self):
+        _, _, _, _, gesture_type = GestureCommand._parse_gesture_key("2_TOUCH_1_DRAG_LEFT")
+        assert gesture_type == mti.GestureType.DRAG_LEFT
+
+    def test_undirected_swipe_parses_for_touch(self):
+        _, _, _, _, gesture_type = GestureCommand._parse_gesture_key("3_TOUCH_1_SWIPE")
+        assert gesture_type == mti.GestureType.SWIPE
+
+    def test_undirected_swipe_rule_matches_a_detected_directional_swipe(self):
+        # matches_rule() implements "undirected acts as wildcard for its directional variants"
+        # via GestureType.base_type, independent of the parsing-stage gestures dict - a configured
+        # rule for bare SWIPE should match an actually-detected SWIPE_LEFT/RIGHT/UP/DOWN event.
+        rule = GestureCommand(device_type=DeviceType.TOUCH, contacts_num=RangeNumber("1"),
+                               num_clicks=RangeNumber("1"), gesture_type=mti.GestureType.SWIPE)
+        detected = GestureCommand(device_type=DeviceType.TOUCH, contacts_num=RangeNumber("1"),
+                                   num_clicks=RangeNumber("1"), gesture_type=mti.GestureType.SWIPE_LEFT)
+        assert detected.matches_rule(rule)
+
     def test_case_insensitive(self):
         lower = GestureCommand._parse_gesture_key("1_any_1_any")
         upper = GestureCommand._parse_gesture_key("1_ANY_1_ANY")

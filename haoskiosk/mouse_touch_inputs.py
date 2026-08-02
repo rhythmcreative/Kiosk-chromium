@@ -12,7 +12,7 @@
 """-------------------------------------------------------------------------------
 # HAOS Kiosk Display — Mouse & Touch Input Engine
 # File: MouseTouchInputs
-# Version: 1.4.22
+# Version: 1.4.23
 # Copyright Jeff Kosowsky
 # Date: August 2026
 #
@@ -358,6 +358,7 @@ import re
 import subprocess
 import shlex
 import shutil
+import sys
 import time
 import threading
 import traceback
@@ -370,7 +371,7 @@ from Xlib import display                  #type: ignore[import-untyped] #pylint:
 from Xlib.xobject.drawable import Window  #type: ignore[import-untyped] #pylint: disable=import-error
 from cdp_client import cdp_navigate_sync
 #-------------------------------------------------------------------------------
-__version__ = "1.4.22"
+__version__ = "1.4.23"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 #-------------------------------------------------------------------------------
@@ -488,15 +489,19 @@ COMPILED_BLACKLIST_REGEX: Final[re.Pattern[str]] = re.compile(
 )
 
 # Allowed Redirections
+# _DEV_NULL_BOUNDARY: without this, "> /dev/null" would also match the *prefix* of
+# "> /dev/nullbackup" - stripping just the safe-looking part and leaving a redirect to an
+# attacker-chosen filename (e.g. "echo secret > /dev/nullbackup") undetected as unsafe.
+_DEV_NULL_BOUNDARY = r"(?=[\s;&|)`\n]|$)"
 SAFE_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(
-    r">\s*/dev/null|"
-    r">>\s*/dev/null|"
-    r"2\s*>\s*/dev/null|"
-    r"2\s*>>\s*/dev/null|"
-    r"&\s*>\s*/dev/null|"
-    r"&\s*>>\s*/dev/null|"
-    r"2\s*>&\s*1|"
-    r"1\s*>&\s*2"
+    r">\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r">>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"&\s*>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"&\s*>>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>&\s*1(?!\d)|"  # (?!\d): "2>&1" must not itself be a prefix of a longer fd number like "2>&15"
+    r"1\s*>&\s*2(?!\d)"
 )
 
 # Any shell redirection operator (used together with SAFE_REDIRECT_REGEX above: after stripping
@@ -1196,10 +1201,24 @@ class DeviceType(EnumNameMixin, Enum):
         gestures={
             GestureType.CLICKTAP:    "Tap",
             GestureType.DRAG:        "Drag",
+            # Directional DRAG/SWIPE variants below: the README documents both DRAG and SWIPE as
+            # supporting _LEFT/_RIGHT/_UP/_DOWN suffixes, and an undirected DRAG/SWIPE as a
+            # wildcard for its directional variants (GestureCommand.matches_rule() already
+            # implements that wildcard matching purely via GestureType.base_type, independent of
+            # this dict). But *parsing* a gesture-string key requires the gesture name to be
+            # present in this per-device dict, and classify_click() also gates which directional
+            # gesture it's willing to report the same way - so bare "SWIPE" and every directional
+            # DRAG_* entry need to actually be listed here for either the config key or the
+            # runtime-detected gesture to be usable at all for TOUCH devices.
+            GestureType.SWIPE:       "Swipe",
             GestureType.SWIPE_LEFT:  "Swipe Left",
             GestureType.SWIPE_RIGHT: "Swipe Right",
             GestureType.SWIPE_UP:    "Swipe Up",
             GestureType.SWIPE_DOWN:  "Swipe Down",
+            GestureType.DRAG_LEFT:   "Drag Left",
+            GestureType.DRAG_RIGHT:  "Drag Right",
+            GestureType.DRAG_UP:     "Drag Up",
+            GestureType.DRAG_DOWN:   "Drag Down",
             GestureType.LONG:        "Long Tap",
             GestureType.CORNER_TOPLEFT:  "Top Left Corner",
             GestureType.CORNER_TOPRIGHT: "Top Right Corner",
@@ -2278,6 +2297,16 @@ class ContactGroup(RegistryMixin):
                 if cls._prev_group_added.get(self.device_id) is self:
                     cls._prev_group_added[self.device_id] = None
                 cls.unregister(self.id)
+                # Also drop any GestureSequence still waiting on this device - e.g. a completed
+                # first click already started one and queued a double-click closeout, and it's
+                # this (stuck) *second* group that never released. Left registered, every future
+                # completed click on the device would keep appending onto this now-orphaned
+                # sequence (GestureSequence.get(device_id) would still find it), growing it
+                # unboundedly and permanently miscounting N-click gestures - the same class of
+                # "permanently wedged" bug this idle timer exists to recover from, just one level
+                # up. Discarded outright (not closed out) since we have no valid gesture_data for
+                # a sequence that got interrupted by a dropped event.
+                GestureSequence.unregister(self.device_id)
 
         self._idle_timer = threading.Timer(CONTACT_GROUP_IDLE_TIMEOUT, on_idle_timeout)
         self._idle_timer.daemon = True
@@ -2943,3 +2972,8 @@ if __name__ == "__main__":
         print("\nExiting cleanly.")
     except Exception:
         traceback.print_exc()
+        # Without this, the process exits 0 (Python's default) even after an unhandled
+        # exception, which makes run.sh's supervisor loop log a misleading "exit code 0" for a
+        # genuine crash - undermining the diagnostic value of that log line (the restart itself
+        # still happens correctly either way, since the loop doesn't gate on exit code).
+        sys.exit(1)

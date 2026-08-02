@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.22
+# Version: 1.4.23
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.22"
+__version__ = "1.4.23"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -483,7 +483,12 @@ class ChromiumKiosk:
             # even show up as a CDP-level problem - Chromium just silently runs with GPU features
             # disabled/software - so without this we'd only ever know THAT it failed (via
             # get_gpu_info), never WHY.
-            self._stderr_task = asyncio.create_task(self._stream_stderr(self.proc))
+            # Uses _spawn() (not a bare create_task()) because this loop can reassign
+            # self._stderr_task on its next iteration (hardware attempt failed, retrying with
+            # software) before the previous attempt's reader task has necessarily finished
+            # draining/exiting - at that point the old task would otherwise have no reference
+            # left anywhere, the exact GC-mid-execution hazard _spawn() exists to close.
+            self._stderr_task = self._spawn(self._stream_stderr(self.proc))
 
             if await self._wait_for_cdp_ready(CDP_READY_TIMEOUT):
                 logger.info("Chromium ready (%s GL, pid=%d)", gl_mode, self.proc.pid)

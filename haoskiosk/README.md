@@ -3,7 +3,7 @@
 Display HA dashboards in kiosk mode directly on your HAOS server, using a
 regular Chromium browser.
 
-## Maintainer: rhythmcreative (version: 1.4.22, August 2026)
+## Maintainer: rhythmcreative (version: 1.4.23, August 2026)
 
 Fork of [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff
 Kosowsky, adapted to drive a stock Chromium browser (via the Chrome
@@ -156,7 +156,7 @@ take precedence *unless* `HA Theme` is set.
 Set HA theme to given string. This setting applies only to HA dashboards
 and may override the value of DARK_MODE unless the theme support both dark
 and light variants. See HACS for downloadable themes to use. (Default:
-True)
+"" - unset, governed by DARK_MODE)
 
 NOTE: You can force the dark or light default theme specifically for HA
 dashboards by setting the theme to `{"dark":true}` or `{"dark":false}`

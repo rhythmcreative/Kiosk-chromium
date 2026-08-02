@@ -1,5 +1,48 @@
 # Changelog
 
+## v1.4.23 - August 2026
+
+Follow-up patch: a self-audit of v1.4.22's own changes found one more real security bug (in
+the fix that commit itself added) plus a few smaller correctness gaps, and separately closes
+two known gesture-grammar gaps that were previously tracked as an `xfail` test.
+
+- **Security fix: the `SAFE_REDIRECT_REGEX` fix added in v1.4.22 could itself be bypassed.**
+  None of its `/dev/null` alternatives required a trailing word boundary, so
+  `"echo secret > /dev/nullbackup"` matched the "safe" `> /dev/null` case as a *prefix* and was
+  stripped before the unsafe-redirect check ran - leaving a redirect to an attacker-chosen
+  filename (`/dev/nullbackup`, not `/dev/null`) undetected, using only a whitelisted program.
+  Verified end-to-end before fixing. Added a boundary requiring what follows `/dev/null` to be
+  whitespace, a shell separator, or end-of-string; also tightened `2>&1`/`1>&2` the same way so
+  they can't be a prefix of a longer, different fd number like `2>&15`.
+- **Fix: a `ContactGroup` recovered by the new idle-timeout (v1.4.22) could leave an orphaned
+  `GestureSequence` behind.** If the *first* click of a would-be double-click completed normally
+  (registering a `GestureSequence` and queuing its closeout) but the *second* click's RELEASE was
+  then dropped, the idle timer correctly force-cleared the stuck `ContactGroup` but never touched
+  the still-registered `GestureSequence` - every subsequent completed click on that device kept
+  appending onto it, growing it unboundedly and permanently miscounting N-click gestures. The idle
+  timeout now also discards any `GestureSequence` registered for the same device.
+- **Fix: one `asyncio.create_task()` call inside `_launch_process`'s hardware→software GL fallback
+  loop was missed by v1.4.22's `_spawn()` hardening.** The loop reassigns `self._stderr_task` on
+  each retry attempt, which could drop the only reference to the *previous* attempt's still-live
+  stderr-reader task - the exact GC-mid-execution hazard `_spawn()` was added to close, in the one
+  spot inside the very code path that commit hardened. Now uses `_spawn()` too.
+- **Fix: `mouse_touch_inputs.py` always exited 0, even on an unhandled exception**, since its
+  top-level handler printed a traceback but never called `sys.exit()`. This made v1.4.22's new
+  `run.sh` supervisor log a misleading "exit code 0" for a genuine crash (the restart itself still
+  happened correctly - only the logged diagnostic was wrong). Now exits 1.
+- **Fix: `Button`/`Finger` gesture strings, README-documented directional `DRAG_LEFT`/etc., and
+  undirected `SWIPE` (as a wildcard for its directional variants) didn't fully work for `TOUCH`
+  devices.** `DeviceType.TOUCH`'s `gestures` dict was missing entries for bare `SWIPE` and all four
+  directional `DRAG_*` `GestureType`s - since the gesture-string regex, per-device validation, and
+  `classify_click()`'s own gating are all derived from that same dict, this blocked both parsing
+  `"3_TOUCH_1_SWIPE"`/`"2_TOUCH_1_DRAG_LEFT"` as config keys *and* ever detecting those as the
+  actual runtime-classified gesture. Added the five missing entries; the `xfail` test from v1.4.22
+  is now a normal passing test, plus a new test locks in that a configured bare-`SWIPE` rule
+  matches an actually-detected `SWIPE_LEFT`/etc. event (already worked via `matches_rule()`'s
+  existing `GestureType.base_type` wildcard logic - this was purely a parsing-stage gap).
+- Minor README fix: "HA Theme" listed its default as `True` (a copy-paste leftover from the "Dark
+  Mode" section above it) - the actual default is `""` (unset, governed by `DARK_MODE`).
+
 ## v1.4.22 - August 2026
 
 Security/robustness/maintainability sweep across the REST API, the Chromium/CDP controller,

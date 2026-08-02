@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: rest_server.py
-# Version: 1.4.22
+# Version: 1.4.23
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -75,7 +75,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.22"
+__version__ = "1.4.23"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -140,15 +140,19 @@ COMPILED_BLACKLIST_REGEX: Final[re.Pattern[str]] = re.compile(
 )
 
 # Allowed Redirections
+# _DEV_NULL_BOUNDARY: without this, "> /dev/null" would also match the *prefix* of
+# "> /dev/nullbackup" - stripping just the safe-looking part and leaving a redirect to an
+# attacker-chosen filename (e.g. "echo secret > /dev/nullbackup") undetected as unsafe.
+_DEV_NULL_BOUNDARY = r"(?=[\s;&|)`\n]|$)"
 SAFE_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(
-    r">\s*/dev/null|"
-    r">>\s*/dev/null|"
-    r"2\s*>\s*/dev/null|"
-    r"2\s*>>\s*/dev/null|"
-    r"&\s*>\s*/dev/null|"
-    r"&\s*>>\s*/dev/null|"
-    r"2\s*>&\s*1|"
-    r"1\s*>&\s*2"
+    r">\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r">>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"&\s*>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"&\s*>>\s*/dev/null" + _DEV_NULL_BOUNDARY + "|"
+    r"2\s*>&\s*1(?!\d)|"  # (?!\d): "2>&1" must not itself be a prefix of a longer fd number like "2>&15"
+    r"1\s*>&\s*2(?!\d)"
 )
 
 # Any shell redirection operator (used together with SAFE_REDIRECT_REGEX above: after stripping
