@@ -117,7 +117,7 @@ configuration:
     name: "REST Port"
     description: |
       Listening port for REST API server (1024-49151) [Default: 8080]
-  rest_authorization_token:
+  rest_bearer_token:
     name: "REST Authorization Token"
     description: |
       Optional authorization token for REST API. [Default: ""]

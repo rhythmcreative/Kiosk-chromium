@@ -456,11 +456,12 @@ def ha_launch_url(site: str) -> bool:
         )
         response.raise_for_status()
         data = response.json()
-        if not data.get("success", False) or not data.get("result", {}).get("success", False):  # Failed to launch url
+        # /launch_url returns just {"success": bool} - no "result"/"stdout" (that shape belongs
+        # to /run_command and /run_commands, not this endpoint).
+        if not data.get("success", False):
             logging.debug("Failed to launch_url: %s", url)
             return False
-        stdout_text = data["result"].get("stdout", "")
-        return "Monitor is On" in stdout_text
+        return True
     except (requests.RequestException, ValueError) as e:
         logger.error("HTTPRequest failed (%s)", e)
         return False

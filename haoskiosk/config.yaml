@@ -124,7 +124,7 @@ schema:
   zoom_level: int(10,1000)
   browser_refresh: int(0,)
   screen_timeout: int(0,)
-  output_number: int(1,2)
+  output_number: int(1,)
   dark_mode: bool
   ha_theme: str?
   ha_sidebar: list(full|narrow|none)
