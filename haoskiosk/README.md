@@ -3,7 +3,7 @@
 Display HA dashboards in kiosk mode directly on your HAOS server, using a
 regular Chromium browser.
 
-## Maintainer: rhythmcreative (version: 1.4.23, August 2026)
+## Maintainer: rhythmcreative (version: 1.4.24, August 2026)
 
 Fork of [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff
 Kosowsky, adapted to drive a stock Chromium browser (via the Chrome

@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: rest_server.py
-# Version: 1.4.23
+# Version: 1.4.24
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -75,7 +75,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.23"
+__version__ = "1.4.24"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 

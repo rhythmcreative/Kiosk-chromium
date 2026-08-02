@@ -12,7 +12,7 @@
 """-------------------------------------------------------------------------------
 # HAOS Kiosk Display — Mouse & Touch Input Engine
 # File: MouseTouchInputs
-# Version: 1.4.23
+# Version: 1.4.24
 # Copyright Jeff Kosowsky
 # Date: August 2026
 #
@@ -371,7 +371,7 @@ from Xlib import display                  #type: ignore[import-untyped] #pylint:
 from Xlib.xobject.drawable import Window  #type: ignore[import-untyped] #pylint: disable=import-error
 from cdp_client import cdp_navigate_sync
 #-------------------------------------------------------------------------------
-__version__ = "1.4.23"
+__version__ = "1.4.24"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 #-------------------------------------------------------------------------------
@@ -2743,27 +2743,35 @@ class XInputParser:
                 continue  # Don't record non-click events (e.g., motion) if not within a contact
 
             try:
+                # These run once per raw xinput stanza line - the highest-frequency path in the
+                # whole program - so guard each debug(5, ...) call rather than building (and
+                # immediately discarding) a formatted string on every line at the default DEBUG_LEVEL.
                 if new_event:  # Print out (debug) event line
-                    debug(5, ("\n" if event_separator else "") + f"EVENT_NUM={self.event.xevent} ({self.event.name})") # Note can't put '\' inside an f-expression
+                    if DEBUG_LEVEL >= 5:
+                        debug(5, ("\n" if event_separator else "") + f"EVENT_NUM={self.event.xevent} ({self.event.name})") # Note can't put '\' inside an f-expression
 
                 elif line.startswith("device:"):  # Format is device: <device_id> (<device_id> OR <attachment_id>))
                     self.event.device_id = int(line.split('(')[1].rstrip(')'))
-                    debug(5, f"DEVICE={self.event.device_id}")
+                    if DEBUG_LEVEL >= 5:
+                        debug(5, f"DEVICE={self.event.device_id}")
 
                 elif line.startswith("time:"):  # Format is: time: <X-Server uptime in ms>
                     self.event.time = int(line.split(':')[-1].strip()) / 1000
-                    debug(5, f"EVENT_TIME={self.event.time}")
+                    if DEBUG_LEVEL >= 5:
+                        debug(5, f"EVENT_TIME={self.event.time}")
                     type(self)._xtime_offset = time.monotonic() - self.event.time # Update offset
 
                 elif line.startswith("detail:"):  # Format is: detail: <Button number for mouse or touch-finger for Touch>
                     self.event.detail = int(line.split('detail:')[-1].strip())
-                    debug(5, f"DETAIL={self.event.detail}")
+                    if DEBUG_LEVEL >= 5:
+                        debug(5, f"DETAIL={self.event.detail}")
 
                 elif line.startswith("root:"):  # Format is: root: <x_coord>/<y_coord>
                     parts = line.strip().split()
                     x_str, y_str = parts[1].split('/')
                     self.event.position = (int(float(x_str)), int(float(y_str)))
-                    debug(5, f"POSITION={self.event.position}")
+                    if DEBUG_LEVEL >= 5:
+                        debug(5, f"POSITION={self.event.position}")
                     event_end  = True # No more lines need to be parsed for non-raw event
 
                 elif line.startswith("valuators:"):  # End for Touch events
@@ -2852,7 +2860,8 @@ def execute_commands(cmds_dict: CommandsDict) -> None:
 
 def process_PRESS(ev: XInputEventFilled) -> None:
     """ Add a new ButtonPress/TouchBegin event to relevant group"""
-    debug(2, f"+PRESS {ev.sprint()}")
+    if DEBUG_LEVEL >= 2:  # Avoid building ev.sprint() (which itself does a registry lookup) when it'll just be discarded
+        debug(2, f"+PRESS {ev.sprint()}")
     with _registry_lock:
         between_presses_string = ""
         group = ContactGroup.last_group_added(ev.device_id)
@@ -2867,11 +2876,13 @@ def process_PRESS(ev: XInputEventFilled) -> None:
                 return
             group.add_event(ev.detail, ev.time, ev.position, ContactState.PRESS)
 
-        debug(4, group.sprint(between_presses_string))
+        if DEBUG_LEVEL >= 4:
+            debug(4, group.sprint(between_presses_string))
 
 def process_RELEASE(ev: XInputEventFilled) -> None:
     """Add a new ButtonReleae/TouchEnd event to relevant group and attempt to closeout gesture sequence if group is complete (no more contacts)"""
-    debug(2, f"-RELEASE {ev.sprint()}")
+    if DEBUG_LEVEL >= 2:
+        debug(2, f"-RELEASE {ev.sprint()}")
     with _registry_lock:
         group = ContactGroup.last_group_added(ev.device_id)
         if group:  # Group should already exist since shouldn't have Release/TouchEnd before Press/TouchBegin
@@ -2885,7 +2896,8 @@ def process_RELEASE(ev: XInputEventFilled) -> None:
 
                 seq = GestureSequence.get(ev.device_id)
                 if seq:  # Gesture sequence already started
-                    debug(4, group.sprint(f" [groups={len(seq.groups)}]"))
+                    if DEBUG_LEVEL >= 4:
+                        debug(4, group.sprint(f" [groups={len(seq.groups)}]"))
                     if single_click_gesture:  # Then existing sequence is closeable
                         gesture_data_prev = seq.last_group.classify_click()  # Gesture data for existing sequence
                         seq.closeout_sequence(gesture_data_prev) # Forcibly closeout existing sequence [as (N-1)-Click/Tap] before adding new group
@@ -2895,7 +2907,8 @@ def process_RELEASE(ev: XInputEventFilled) -> None:
 
                 else:  # Start new sequence for new group
                     seq = GestureSequence(group)
-                    debug(4, group.sprint(f" [groups={len(seq.groups)}]"))
+                    if DEBUG_LEVEL >= 4:
+                        debug(4, group.sprint(f" [groups={len(seq.groups)}]"))
 
                 time_to_double_click_timeout = group.time_to_double_click_timeout
                 if single_click_gesture or time_to_double_click_timeout < 0: # Possible to closeout sequence now
@@ -2905,13 +2918,18 @@ def process_RELEASE(ev: XInputEventFilled) -> None:
 
 def process_MOTION(ev: XInputEventFilled) -> None:
     """ Add a new updated position event if detail is pressed in an active group"""
-    debug(2, f"=MOTION {ev.sprint()}")
+    # MOTION is the highest-frequency event of the three (fires continuously during a drag/swipe,
+    # not just once per press/release) - avoiding ev.sprint()'s string-building and registry
+    # lookup here when DEBUG_LEVEL doesn't call for it matters more than in PRESS/RELEASE.
+    if DEBUG_LEVEL >= 2:
+        debug(2, f"=MOTION {ev.sprint()}")
     with _registry_lock:
         group = ContactGroup.last_group_added(ev.device_id)
         if group and not group.is_complete and (ev.xevent in MOUSE_MOTION_EVENTS or ev.detail in group.current_pressed):
             # Only update if mouse motion or 'detail' is currently pressed in the group (i.e, between presses and releases)
             group.add_event(ev.detail, ev.time, ev.position, ContactState.MOTION)
-            debug(4, group.sprint())
+            if DEBUG_LEVEL >= 4:
+                debug(4, group.sprint())
 
 #-------------------------------------------------------------------------------
 ### Main event loop
