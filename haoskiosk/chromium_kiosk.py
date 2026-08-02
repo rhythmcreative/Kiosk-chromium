@@ -1,9 +1,9 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.21
+# Version: 1.4.22
 # Copyright Jeff Kosowsky
-# Date: July 2026
+# Date: August 2026
 
 Drives a regular (non-forked) Chromium browser in kiosk mode via the Chrome
 DevTools Protocol (CDP), replacing the old Luakit-based 'userconf.lua'.
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.21"
+__version__ = "1.4.22"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -55,6 +55,7 @@ HARD_RELOAD_FREQ = 10   # Every Nth periodic refresh also bypasses cache (mirror
 MAX_LOAD_FAILURES = 5   # Consecutive main-document load failures before restarting Chromium
 CDP_READY_TIMEOUT = 20  # Seconds to wait for Chromium's CDP endpoint to come up
 GRACEFUL_STOP_TIMEOUT = 5  # Seconds to wait for SIGTERM before SIGKILL
+DBUS_SEND_TIMEOUT = 5  # Seconds to wait for a dbus-send call (e.g. Onboard hide) before killing it
 MAX_RESTARTS_PER_WINDOW = 5   # Give up restarting (let the container exit) after this many restarts...
 RESTART_WINDOW_SECONDS = 180  # ...within this many seconds - avoids a tight crash-restart loop
 HEALTH_CHECK_INTERVAL = 3          # Seconds between CDP reachability polls
@@ -110,7 +111,12 @@ class ChromiumKiosk:
         self.initial_url = f"{self.ha_url}/{dashboard}".rstrip("/") if dashboard else self.ha_url
 
         self.login_delay = max(_env_float("LOGIN_DELAY", 1.0), 0.1)
-        self.zoom_level = max(_env_float("ZOOM_LEVEL", 100), 1)
+
+        raw_zoom = _env_float("ZOOM_LEVEL", 100)
+        self.zoom_level = min(max(raw_zoom, 25), 500)
+        if self.zoom_level != raw_zoom:
+            logger.warning("ZOOM_LEVEL value %s out of range; clamped to %s", raw_zoom, self.zoom_level)
+
         self.browser_refresh = max(_env_float("BROWSER_REFRESH", 600), 0)
         self.dark_mode = _env_bool("DARK_MODE", True)
         self.onscreen_keyboard = _env_bool("ONSCREEN_KEYBOARD", False)
@@ -156,6 +162,10 @@ class ChromiumKiosk:
         self._stderr_task: asyncio.Task[None] | None = None
         self._health_check_task: asyncio.Task[None] | None = None
         self._hardware_retry_task: asyncio.Task[None] | None = None
+        # Fire-and-forget tasks spawned via self._spawn() (restarts, auto-login, on-page-loaded
+        # hooks) - kept here so nothing relies solely on asyncio.create_task()'s internal weak
+        # reference, which per asyncio's own docs can let an in-flight task be garbage-collected.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._restart_lock = asyncio.Lock()
         self._restart_timestamps: list[float] = []
         self._force_software_gl = False  # Set once hardware GL is observed to crash post-startup
@@ -195,19 +205,40 @@ class ChromiumKiosk:
             self._reset_refresh_timer()
             self._refresh_task = asyncio.create_task(self._refresh_loop())
 
+    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
+        """Create a fire-and-forget task while keeping a strong reference to it. Per asyncio's own
+        docs, create_task() only stores a *weak* reference internally - a task with no other
+        referrer can be garbage-collected mid-execution at any await point. Several of ours (a
+        full browser restart in particular) run for multiple seconds across several awaits, which
+        is exactly the scenario that warning is about."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
+
+    def _on_background_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Background task failed", exc_info=exc)
+
     async def stop(self) -> None:
         """Gracefully tear down Chromium and the CDP session."""
         self._stopping = True
-        if self._refresh_task:
-            self._refresh_task.cancel()
-        if self._watchdog_task:
-            self._watchdog_task.cancel()
-        if self._health_check_task:
-            self._health_check_task.cancel()
-        if self._hardware_retry_task:
-            self._hardware_retry_task.cancel()
-        if self._stderr_task:
-            self._stderr_task.cancel()
+        tasks = [t for t in (
+            self._refresh_task, self._watchdog_task, self._health_check_task,
+            self._hardware_retry_task, self._stderr_task,
+        ) if t is not None]
+        tasks += list(self._background_tasks)
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            # Make sure each task's own cleanup (e.g. _health_check_loop's ClientSession,
+            # _stream_stderr's reader) actually finishes before we tear down the rest of our
+            # state below, rather than letting it unwind concurrently with/after it.
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self.conn:
             with suppress(Exception):
                 await self.conn.close()
@@ -427,8 +458,14 @@ class ChromiumKiosk:
             env["LANGUAGE"] = self.browser_language
         return env
 
-    async def _launch_process(self) -> None:
-        gl_modes = ("software",) if self._force_software_gl else ("hardware", "software")
+    async def _launch_process(self, force_software: bool | None = None) -> None:
+        """'force_software' overrides self._force_software_gl for just this one launch attempt
+        (used by the hardware-GL retry path, which needs to actually *try* hardware without
+        touching the persistent flag until the outcome of this specific attempt is known - see
+        _restart_browser's clear_software_gl handling). None (the default) uses the persistent
+        flag as-is."""
+        use_force_software = self._force_software_gl if force_software is None else force_software
+        gl_modes = ("software",) if use_force_software else ("hardware", "software")
         for gl_mode in gl_modes:
             shutil.rmtree(PROFILE_DIR, ignore_errors=True)  # Always start from a fresh profile (no session restore)
             os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -507,8 +544,19 @@ class ChromiumKiosk:
         except asyncio.TimeoutError:
             with suppress(Exception):
                 self.proc.kill()
-            with suppress(Exception):
-                await self.proc.wait()
+            try:
+                # This is called with self._restart_lock held (from _restart_browser), so an
+                # unreaped process here (e.g. stuck in uninterruptible D-state) would otherwise
+                # hang forever and silently wedge every future restart trigger (health check,
+                # watchdog, hardware-GL retry) for the rest of the session. Give up waiting after
+                # a bounded time instead - the process is already SIGKILLed; if the kernel still
+                # can't reap it, no amount of waiting here will fix that.
+                await asyncio.wait_for(self.proc.wait(), timeout=GRACEFUL_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Chromium process (pid=%s) did not get reaped %ds after SIGKILL - giving up waiting",
+                    self.proc.pid, GRACEFUL_STOP_TIMEOUT,
+                )
 
     async def _watch_process_exit(self, watched_proc: asyncio.subprocess.Process) -> None:
         """Detect Chromium exiting on its own (e.g. a GPU/renderer crash bringing down the whole
@@ -541,6 +589,14 @@ class ChromiumKiosk:
                     except (OSError, ConnectionError, asyncio.TimeoutError):
                         healthy = False
 
+                    # HTTP reachability alone isn't enough: if the CDP websocket reader task has
+                    # died (e.g. a connect race, or the websocket dropped after a send() that
+                    # never got its response) while Chromium's own HTTP endpoint keeps responding
+                    # fine, this would otherwise report "healthy" forever with no working CDP
+                    # session and no way to navigate/reload/recover.
+                    if healthy and self.conn is not None and not self.conn.connected:
+                        healthy = False
+
                     if healthy:
                         consecutive_failures = 0
                         continue
@@ -561,7 +617,7 @@ class ChromiumKiosk:
             logger.warning("Escalating to software (SwiftShader) GL rendering after a hardware-GL crash")
             self._force_software_gl = True
             self._software_gl_since = time.monotonic()
-        asyncio.create_task(self._restart_browser(reason))
+        self._spawn(self._restart_browser(reason))
 
     async def _hardware_retry_loop(self) -> None:
         """After a hardware-GL crash forces software rendering, periodically give hardware GL
@@ -578,13 +634,18 @@ class ChromiumKiosk:
                     "Retrying hardware GL after %ds of stable software-GL operation",
                     int(time.monotonic() - self._software_gl_since),
                 )
-                self._force_software_gl = False
-                self._software_gl_since = None
-                asyncio.create_task(self._restart_browser("Retrying hardware GL after cooldown"))
+                # Deliberately NOT clearing _force_software_gl/_software_gl_since here: if
+                # _restart_browser turns out to be a no-op (e.g. _restart_lock is already held by
+                # a concurrent crash-triggered restart), clearing them now would permanently
+                # disable this loop's own guard above (_software_gl_since becomes None) with no
+                # further retry ever attempted - silently stuck on software rendering. Instead
+                # pass clear_software_gl=True so _restart_browser only clears them once a
+                # hardware-GL launch it actually performed has succeeded.
+                self._spawn(self._restart_browser("Retrying hardware GL after cooldown", clear_software_gl=True))
         except asyncio.CancelledError:
             pass
 
-    async def _restart_browser(self, reason: str) -> None:
+    async def _restart_browser(self, reason: str, clear_software_gl: bool = False) -> None:
         if self._restart_lock.locked() or self._stopping:
             return
         async with self._restart_lock:
@@ -610,8 +671,40 @@ class ChromiumKiosk:
             await self._kill_process()
             self._consecutive_failures = 0
             self._settings_applied = False
-            await self._launch_process()
-            await self._connect_cdp()
+            try:
+                # clear_software_gl=True (hardware-GL retry path) means "actually try hardware for
+                # this one attempt", regardless of the persistent _force_software_gl flag - which
+                # we deliberately don't touch until we know whether this attempt truly succeeded.
+                await self._launch_process(force_software=False if clear_software_gl else None)
+                await self._connect_cdp()
+            except Exception:
+                # If this fails partway (e.g. _connect_cdp raises after Chromium's HTTP endpoint
+                # is already up), don't leave self.conn set to a half-configured connection - the
+                # health check's HTTP-reachability poll would then keep reporting "healthy"
+                # forever with no working CDP session and no event handlers registered. Clean up
+                # fully and let the health check's own polling notice we're down and retry
+                # (still bounded by the restart-rate-limiter above).
+                logger.exception("RESTART FAILED (%s): could not relaunch/reconnect Chromium", reason)
+                if self.conn:
+                    with suppress(Exception):
+                        await self.conn.close()
+                    self.conn = None
+                await self._kill_process()
+                raise
+            if clear_software_gl:
+                if self._active_gl_mode == "hardware":
+                    # The retry actually landed on hardware - stable again, stop tracking a cooldown.
+                    self._force_software_gl = False
+                    self._software_gl_since = None
+                else:
+                    # _launch_process's own hardware->software fallback kicked in again within this
+                    # same attempt (hardware still doesn't work). Re-arm exactly as a fresh crash
+                    # would: keep forcing software and restart the cooldown, so future launches skip
+                    # straight to software again and the retry loop tries once more after another
+                    # full interval, instead of silently giving up (if we left the flags cleared) or
+                    # never retrying again (if we'd cleared them before knowing the outcome).
+                    self._force_software_gl = True
+                    self._software_gl_since = time.monotonic()
             self._watchdog_task = asyncio.create_task(self._watch_process_exit(self.proc))
             self._reset_refresh_timer()
 
@@ -724,11 +817,11 @@ class ChromiumKiosk:
 
         auth_prefix = self.ha_url_base + "/auth/authorize?response_type=code"
         if self._current_url.startswith(auth_prefix):
-            asyncio.create_task(self._do_auto_login())
+            self._spawn(self._do_auto_login())
 
     def _on_load_event(self, _params: dict[str, Any]) -> None:
         self._consecutive_failures = 0
-        asyncio.create_task(self._on_page_loaded())
+        self._spawn(self._on_page_loaded())
 
     def _on_loading_failed(self, params: dict[str, Any]) -> None:
         if params.get("type") != "Document" or params.get("canceled"):
@@ -737,7 +830,7 @@ class ChromiumKiosk:
         logger.warning("Page load failed (%d/%d): %s [%s]",
                         self._consecutive_failures, MAX_LOAD_FAILURES, self._current_url, params.get("errorText"))
         if self._consecutive_failures >= MAX_LOAD_FAILURES:
-            asyncio.create_task(self._restart_browser("too many consecutive load failures"))
+            self._spawn(self._restart_browser("too many consecutive load failures"))
 
     async def _on_page_loaded(self) -> None:
         url = self._current_url
@@ -749,7 +842,17 @@ class ChromiumKiosk:
                     "/org/onboard/Onboard/Keyboard", "org.onboard.Onboard.Keyboard.Hide",
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
                 )
-                await proc.wait()
+                # This runs on every navigation (initial load, periodic refresh, hard reload,
+                # websocket-recovery reload). 'suppress(Exception)' only catches exceptions, not a
+                # hang - if the D-Bus session is ever slow/unresponsive, unbounded proc.wait() calls
+                # here would accumulate indefinitely. Bound it and kill on timeout.
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=DBUS_SEND_TIMEOUT)
+                except asyncio.TimeoutError:
+                    with suppress(Exception):
+                        proc.kill()
+                    with suppress(Exception):
+                        await proc.wait()
 
         is_auth_page = url.startswith(self.ha_url_base + "/auth/")
         under_ha = (url + "/").startswith(self.ha_url_base + "/")

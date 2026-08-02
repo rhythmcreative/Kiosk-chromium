@@ -1,16 +1,19 @@
 ################################################################################
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: Dockerfile
-# Version: 1.4.21
+# Version: 1.4.22
 # Copyright Jeff Kosowsky
-# Date: July 2026
+# Date: August 2026
 ################################################################################
 
-ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
+# Pinned to a specific Alpine line (3.24) rather than ':latest' - both for reproducible builds
+# (two builds of this Dockerfile on different days should produce materially the same image) and
+# to stay in lockstep with the Chromium package repository pin below, which targets the same
+# Alpine version. ghcr.io/home-assistant/base publishes per-Alpine-version tags (e.g. '3.24',
+# '3.24-<release>') alongside a floating 'latest' that moves independently as new Alpine versions
+# are added - relying on 'latest' here would eventually re-diverge the two.
+ARG BUILD_FROM=ghcr.io/home-assistant/base:3.24
 FROM $BUILD_FROM
-
-ARG BUILD_VERSION
-ENV ADDON_VERSION=${BUILD_VERSION}
 
 #===============================================================================
 ##### Install X, Browser and all necessary dependencies
@@ -66,13 +69,24 @@ RUN apk update && apk add --no-cache \
       x11vnc \
 # Browser (regular Chromium, driven externally via the Chrome DevTools Protocol -
 # see chromium_kiosk.py - rather than Luakit's in-process Lua scripting)
-   && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/v3.21/community \
+# NOTE: keep this repository pin's Alpine version in lockstep with BUILD_FROM above - it's what
+# determines which Chromium version actually ships (v3.21/community was Chromium 136.x; v3.24
+# tracks 150.x, matching this base image's own Alpine version rather than an older archive).
+   && apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
         chromium \
         chromium-swiftshader \
         chromium-lang \
    && rm -rf /var/cache/apk/*
 
 #===============================================================================
+
+# Placed after the (expensive, rarely-changing) package install above rather than before it:
+# BUILD_VERSION changes with every add-on release, and Docker layer caching invalidates every
+# subsequent layer once one layer's content changes - having this before 'RUN apk add' forced a
+# full Xorg/Chromium re-download+reinstall on every single release, even one that only touched
+# run.sh or a Python file.
+ARG BUILD_VERSION
+ENV ADDON_VERSION=${BUILD_VERSION}
 
 ##### Set the display variable
 ENV DISPLAY=:0

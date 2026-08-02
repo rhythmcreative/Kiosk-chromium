@@ -673,9 +673,34 @@ fi
 echo "Audio Sinks (* = default)"
 pactl list short sinks | awk -v def="$sink" '{prefix = ($2 == def) ? "*" : " "; printf "  %s%s\n", prefix, $0}'
 
-### Launch Xinput parsing...
+### Launch Xinput parsing, supervised - unlike the REST server (which owns Chromium's whole
+### lifecycle and is deliberately fatal-on-exit, see the 'wait "$REST_SERVER_PID"' below),
+### mouse_touch_inputs.py was previously just backgrounded with no PID tracking or restart logic
+### at all: if it ever threw an unhandled exception (its own top-level handler just prints a
+### traceback and exits), gesture/touch control would silently stop working for the rest of the
+### container's life with no signal at this level. Restart it on unexpected exit, capped to avoid
+### a tight crash-loop if it genuinely can't run in this environment.
 bashio::log.info "Starting Mouse & Touch input gesture command parsing..."
-python3 -u /mouse_touch_inputs.py  -d 1 -w "$COMMAND_WHITELIST" &
+(
+    restarts=0
+    window_start=$(date +%s)
+    while true; do
+        python3 -u /mouse_touch_inputs.py -d 1
+        exit_code=$?
+        now=$(date +%s)
+        if (( now - window_start > 300 )); then  # Reset the counter every 5 minutes of uptime
+            restarts=0
+            window_start=$now
+        fi
+        restarts=$(( restarts + 1 ))
+        if (( restarts > 10 )); then
+            bashio::log.error "mouse_touch_inputs.py exited $restarts times in 5 minutes (last exit code $exit_code) - giving up on gesture support for this session"
+            break
+        fi
+        bashio::log.warning "mouse_touch_inputs.py exited unexpectedly (code $exit_code) - restarting it ($restarts/10)..."
+        sleep 2
+    done
+) &
 
 #### Start  HAOSKiosk REST server
 bashio::log.info "Starting HAOSKiosk REST server..."

@@ -1,5 +1,131 @@
 # Changelog
 
+## v1.4.22 - August 2026
+
+Security/robustness/maintainability sweep across the REST API, the Chromium/CDP controller,
+and the gesture-input parser, plus new test coverage and a Chromium version bump. No behavior
+changes to documented, working functionality - only fixes to bugs and gaps found by review.
+
+- **Security fix: command whitelist/blacklist could be bypassed via an embedded newline**, in
+  both `rest_server.py`'s `/run_command`/`/run_commands` REST endpoints and
+  `mouse_touch_inputs.py`'s gesture action commands. `SEPARATORS` (the set used to split a
+  compound command into individual programs to check) didn't include `\n`/`\r`, so a command
+  string like `"echo hi\nrm -rf /media"` had only its first line's program ("echo") checked
+  against the whitelist/blacklist, while the *entire* string - newline included - was still
+  handed to `/bin/sh -c`, which treats a literal newline exactly like `;`, running the second,
+  unchecked (here, blacklisted) command anyway. Added `\n`/`\r` to `SEPARATORS` in both files so
+  every line is tokenized and checked independently, closing the bypass.
+- **Security fix: whitelisted commands could redirect output to write/overwrite arbitrary
+  files.** `SAFE_REDIRECT_REGEX` (meant to restrict shell redirection to safe forms like
+  `> /dev/null`, `2>&1`) was defined but never actually enforced anywhere, so e.g.
+  `"echo pwned > /etc/some_file"` passed whitelist checking (only `echo`'s program name was
+  checked) and executed the redirection unimpeded. Now enforced in both files' command
+  validators: any redirection operator not matching one of the explicitly-safe forms blocks the
+  whole command. (Fixing this also surfaced and fixed a related latent bug: splitting on a bare
+  `&` for background-job detection was mis-tokenizing legitimate `2>&1`-style fd-merge
+  redirections, treating the trailing `1` as an unknown "program" and rejecting the command -
+  safe redirections are now stripped before program-name extraction.)
+- **Security fix: REST API bearer token compared with a non-constant-time `!=`**, a timing
+  side-channel that could in principle help an attacker recover `REST_BEARER_TOKEN` byte by
+  byte over many requests. Switched to `hmac.compare_digest`.
+- **Fix: `POST /unmute_audio` raised an opaque 500 instead of its documented error response**
+  whenever the underlying `pactl` calls failed (e.g. no default sink) - `volumes` was only ever
+  assigned inside a success branch but read unconditionally in the response, raising
+  `NameError`. Now initialized up front.
+- **Fix: a blocking `subprocess.run()` call inside an `async def` handler** (`get_input_devices`,
+  used by `/disable_inputs` and `/enable_inputs`) stalled the entire REST server's event loop -
+  every other in-flight request (screenshots, `kiosk_status`, `run_command`, ...) - for however
+  long `libinput list-devices` took. Switched to `asyncio.create_subprocess_exec`.
+- **Fix: race condition in `/disable_inputs`/`/enable_inputs`** could let two concurrent calls
+  both "see" a device as not-yet-grabbed and both spawn a grabbing `evtest --grab` process on the
+  same `/dev/input/eventN`, leaving one orphaned and the device unexpectedly still blocked after
+  a later `/enable_inputs`. Serialized both handlers with a lock; also registered the long-lived
+  `evtest` processes in the same tracking set `/current_processes` already reports, since they
+  weren't counted before.
+- **Fix: REST API 500 responses leaked raw exception text** (paths, argument values, internals)
+  to the client, including unauthenticated callers when `REST_BEARER_TOKEN` isn't set. The detail
+  is already logged server-side; the client now just gets a generic error message.
+- **Robustness: several fire-and-forget `asyncio.create_task()` calls in `chromium_kiosk.py`**
+  (browser restarts, auto-login, post-load hooks) held no reference beyond the event loop's own
+  weak one - per asyncio's own documented gotcha, an in-flight task can be garbage-collected at
+  any await point with no reference keeping it alive. All are now tracked via a small `_spawn()`
+  helper that keeps a strong reference and logs any exception the task raises (previously silent).
+- **Robustness: a Chromium restart that failed partway through (e.g. the CDP connection failing
+  right after Chromium's HTTP endpoint came up) could leave the controller with a half-configured
+  `self.conn`** and no event handlers registered, while the health check - which only polled HTTP
+  reachability - kept reporting "healthy" indefinitely, since Chromium itself was still up. The
+  health check now also verifies the CDP reader task is actually alive, and a failed restart now
+  cleans up fully (closes/nulls the connection, kills the process) so the next health-check cycle
+  correctly detects it's down and retries, still bounded by the existing restart-rate-limiter.
+- **Robustness: the hardware-GL retry loop could permanently get stuck on software (SwiftShader)
+  rendering.** It previously cleared its own "currently forced onto software GL" bookkeeping
+  *before* confirming the retry attempt actually ran (it could be a silent no-op if a concurrent
+  restart already held the restart lock) - leaving the loop's own guard (which requires that
+  bookkeeping to be set) permanently disabled with no further retry ever attempted. The retry
+  attempt now explicitly tries hardware GL for just that one attempt without touching the
+  persistent flag until the outcome (success, or fallback to software within the same attempt) is
+  known.
+- **Robustness: unbounded waits that could wedge the restart machinery.** `_kill_process()`'s
+  post-SIGKILL `proc.wait()` and the per-page-load `dbus-send` call (Onboard hide) had no
+  timeout; since `_kill_process()` runs under the same lock every restart path needs,  a stuck
+  reap would silently block every future restart trigger indefinitely. Both are now bounded, and
+  `stop()` now awaits every cancelled background task to actually finish (not just requests
+  cancellation) before tearing down the rest of the controller's state.
+- **Robustness: `ZOOM_LEVEL` was only clamped on the low end** (`max(value, 1)`), so a
+  misconfigured value had no upper bound on the resulting `--force-device-scale-factor`. Now
+  clamped to a sane range (25-500) with a warning log, consistent with how other options validate.
+- **Robustness: a CDP connection that dropped mid-request left any in-flight `send()` call
+  waiting for its full timeout** instead of failing immediately, adding needless latency to
+  crash/restart detection. `CDPConnection`'s read loop now fails all pending requests as soon as
+  the connection ends.
+- **Robustness: a single dropped touch/mouse RELEASE event (or an `xinput` crash/restart) could
+  permanently corrupt gesture recognition for a device.** `xinput test-xi2 --root` is one process
+  covering *every* input device, so a restart previously left whatever contact groups were mid-
+  press for any device registered forever, silently absorbing every future press
+  (`_reset_all_gesture_state()` now clears all devices' state on restart). Separately, a
+  `ContactGroup` that never received a RELEASE for one of its contacts (a real, documented touch-
+  event reliability quirk) never completed and so was never replaced, permanently wedging that
+  device the same way; each `ContactGroup` now force-clears itself after 30s with no RELEASE.
+- **Fix: `<DEVICE>` "Mechanism" aliases (`Button`, `Finger`) documented in the README's Gesture
+  String Keys section didn't actually work** - e.g. the README's own example
+  `"2_Button_1_Long Click"` failed to parse. The gesture-string regex only ever matched
+  `DeviceType` enum names (`MOUSE`/`TOUCH`/...), never each device's `contact_type` alias. Added
+  a reverse lookup so both forms resolve to the same `DeviceType`.
+- Removed the dead `-w`/`--white_list` CLI flag in `mouse_touch_inputs.py` - `run.sh` passed it,
+  but the script never read it; the actual whitelist has only ever come from the
+  `COMMAND_WHITELIST` environment variable (which `run.sh` also exports), so the flag did nothing
+  and risked confusing anyone updating the whitelist mechanism later.
+- **`run.sh` now supervises `mouse_touch_inputs.py`**, restarting it (rate-limited) if it exits
+  unexpectedly. Previously it was backgrounded with no PID tracking or restart logic at all -
+  unlike the REST server, whose exit `run.sh` explicitly waits on - so a crash (its own top-level
+  handler just prints a traceback and exits) silently disabled all gesture/touch control for the
+  rest of the container's life with no signal at this level.
+- **Chromium bumped from Alpine v3.21's `community` repo (136.0.7103.113) to v3.24's
+  (150.0.7871.181)** - `BUILD_FROM`'s default (`ghcr.io/home-assistant/base`) already moved its
+  own `latest`/default Alpine version to 3.24, so the previous pin meant Chromium itself was
+  quietly running ~14 major versions behind the rest of the image's own packages, missing
+  everything patched upstream since. `BUILD_FROM` is now pinned to the matching `:3.24` tag
+  (rather than the floating `:latest`) so the two can't silently drift apart again, and for
+  reproducible builds generally.
+- **`ARG BUILD_VERSION`/`ENV ADDON_VERSION` moved to after the (expensive, rarely-changing)
+  package-install layer** in the Dockerfile. It previously sat before `RUN apk add`, and since
+  `BUILD_VERSION` changes on every add-on release, Docker's layer caching invalidated the entire
+  Xorg/Chromium install on every single release - even one that only touched `run.sh` or a
+  Python file.
+- **Added a pytest suite** (`tests/test_gesture_grammar.py`) for `mouse_touch_inputs.py`'s
+  gesture-string grammar (`RangeNumber`'s subset/superset comparison semantics,
+  `GestureCommand`'s key/value parsing against the README's own documented examples), the command
+  whitelist/blacklist/redirection security model (including regression tests for the two security
+  fixes above), and the gesture-commands-file preprocessor (comments, brace-optional/trailing-
+  comma JSON, the `"gestures"` wrapper key format used to read HA's `options.json` directly).
+  There was previously no test coverage anywhere in the repo for this fairly involved, hand-
+  written parsing logic - a regression here would otherwise be very hard to trace back to a
+  parsing bug from a user report of "gesture X doesn't work anymore". One gap surfaced by writing
+  these tests is tracked as an `xfail`: the README documents directional `DRAG_LEFT`/etc. gesture
+  strings as valid, but no `DeviceSpec` currently defines those gesture names, so none can
+  actually parse - flagged rather than fixed outright since fixing it for real touches gesture
+  *classification*, not just string parsing, and needs hardware verification.
+
 ## v1.4.21 - July 2026
 
 - **Fix: `browser_language` had no effect on Chromium's own native UI**

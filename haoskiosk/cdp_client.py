@@ -1,9 +1,9 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: cdp_client.py
-# Version: 1.4.21
+# Version: 1.4.22
 # Copyright Jeff Kosowsky
-# Date: July 2026
+# Date: August 2026
 
 Minimal Chrome DevTools Protocol (CDP) client helpers shared by 'rest_server.py'
 (long-lived connection via ChromiumKiosk) and 'mouse_touch_inputs.py' (short-lived,
@@ -165,6 +165,23 @@ class CDPConnection:
             raise
         except Exception as e:  # pylint: disable=broad-except
             logger.warning("[CDPConnection] Read loop terminated: %s", e)
+        finally:
+            # If the websocket drops (Chromium crash, network hiccup) while a send() is still
+            # waiting on a response, the loop above simply ends and would otherwise leave that
+            # future unresolved until its own timeout expires - adding needless latency to
+            # crash/restart detection paths that are meant to be fast. Fail them immediately.
+            if self._pending:
+                err = ConnectionError("CDP connection closed while request was in flight")
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(err)
+                self._pending.clear()
+
+    @property
+    def connected(self) -> bool:
+        """Whether the reader task is still alive - i.e. this connection can still receive
+        responses/events, not just whether an underlying websocket object exists."""
+        return self._reader_task is not None and not self._reader_task.done()
 
     def on(self, method: str, handler: Any) -> None:
         """Register a callback for a CDP event (e.g. 'Page.frameNavigated')."""

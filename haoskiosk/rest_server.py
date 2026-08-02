@@ -1,9 +1,9 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
-# File: services.py
-# Version: 1.3.2
+# File: rest_server.py
+# Version: 1.4.22
 # Copyright Jeff Kosowsky
-# Date: April 2026
+# Date: August 2026
 
  Launch REST API server with following commands:
    POST /launch_url        {"url": "<url>"}
@@ -53,6 +53,7 @@
 #-------------------------------------------------------------------------------
 from __future__ import annotations
 import asyncio
+import hmac
 import inspect
 import ipaddress
 import json
@@ -74,7 +75,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.21"
+__version__ = "1.4.22"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -150,8 +151,19 @@ SAFE_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(
     r"1\s*>&\s*2"
 )
 
+# Any shell redirection operator (used together with SAFE_REDIRECT_REGEX above: after stripping
+# every *safe* redirection from a command, any operator still matching this means an unsafe
+# redirection target, e.g. writing to an arbitrary file) - see is_command_allowed()
+ANY_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(r"\d*\s*>{1,2}|\d*\s*<{1,2}|&\s*>{1,2}")
+
 # Command separators to parse and split
-SEPARATORS: frozenset[str] = frozenset({ "&&", "||", ";", "|", "&", "$(", "${", "`", "(", "{", "[[", "((" })
+# NOTE: '\n' and '\r' are included deliberately - without them, a command string containing an
+# embedded newline (e.g. "echo hi\nrm -rf /media") is treated by shlex.split() as one token
+# stream, so only the *first* program on the first line is ever checked against the
+# whitelist/blacklist below, while asyncio.create_subprocess_shell() still hands the whole,
+# untouched string to `/bin/sh -c`, which treats '\n' exactly like ';' - executing every
+# subsequent (unchecked) command. Splitting on them here closes that bypass.
+SEPARATORS: frozenset[str] = frozenset({ "&&", "||", ";", "|", "&", "$(", "${", "`", "(", "{", "[[", "((", "\n", "\r" })
 SEP_REGEX: Final[re.Pattern[str]] = re.compile('(?:' + '|'.join(re.escape(op) for op in sorted(SEPARATORS, key=len, reverse=True)) + ')')
 
 DANGEROUS_SHELL_TOKENS: set[str] = { # Disallowed shell tokens if just expecting string arguments (used only in xset for now)
@@ -200,6 +212,7 @@ except Exception as e:
 
 _command_semaphore = asyncio.Semaphore(MAX_CONCURRENT_COMMANDS)
 _active_processes: set[asyncio.subprocess.Process] = set()   # Track currently running subprocesses
+_inputs_lock = asyncio.Lock()  # Serializes disable_inputs/enable_inputs to avoid a check-then-grab race on the same device
 
 # --------------------------------------------------------------------------- #
 # Helper Functions
@@ -221,9 +234,17 @@ def is_command_allowed(command_str: str) -> tuple[bool, str]:  #pylint: disable=
     if ALLOW_ALL_USER_COMMANDS:
         return True, "All commands allowed"
 
-    # Extract all programs in the potentially compound command
+    # Reject shell redirection unless it matches one of the explicitly-safe forms (SAFE_REDIRECT_REGEX,
+    # e.g. "> /dev/null", "2>&1"). Otherwise even a whitelisted program (e.g. "echo") could be used to
+    # write/overwrite an arbitrary file the process can reach (e.g. "echo pwned > /etc/some_file").
+    if ANY_REDIRECT_REGEX.search(SAFE_REDIRECT_REGEX.sub("", command_str)):
+        return False, "Unsafe shell redirection"
+
+    # Extract all programs in the potentially compound command. Strip out already-validated-safe
+    # redirections first (e.g. "2>&1") so their bare '&' isn't misread as a background-job
+    # separator, which would otherwise mis-tokenize a trailing fd number (e.g. "1") as a program.
     programs = set()
-    parts = SEP_REGEX.split(command_str)
+    parts = SEP_REGEX.split(SAFE_REDIRECT_REGEX.sub(" ", command_str))
     for part in parts:
         part = part.strip()
         if not part:
@@ -654,14 +675,30 @@ async def handle_run_commands(data: Payload) -> dict[str, Any]:
 # List of inputs to skip when enabling/disabling inputs
 INPUT_IGNORE_LIST = [ "XTEST", "Power Button", "Video Bus", "Sleep Button", "Consumer Control", "System Control" ]
 
-def get_input_devices() -> dict[str, str]:
+async def get_input_devices(timeout: int = SHORT_TIMEOUT) -> dict[str, str]:
     """Returns a dict of {device_name: /dev/input/eventN}, excluding devices in IGNORE_LIST."""
-    devices = {}
-    result = subprocess.run(["libinput", "list-devices"], capture_output=True, text=True, check=True)
+    devices: dict[str, str] = {}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "libinput", "list-devices",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            logger.warning("libinput list-devices failed with code %d: %s", proc.returncode, stderr.decode(errors="replace"))
+            return devices
+        output = stdout.decode(errors="replace")
+    except asyncio.TimeoutError:
+        logger.warning("libinput list-devices timed out after %s seconds", timeout)
+        return devices
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("Failed to get libinput device list: %s", e)
+        return devices
 
     dev_name = None
 
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         line = line.strip()
         if line.startswith("Device:"):
             dev_name = line.split("Device:", 1)[1].strip()
@@ -708,62 +745,70 @@ async def get_running_evtest_processes(timeout: int = SHORT_TIMEOUT) -> dict[str
 @register_function("disable_inputs")
 async def handle_disable_inputs(data: Payload) -> dict[str, Any]:  # pylint: disable=unused-argument
     """Disable inputs by blocking each input with 'evtest'"""
-    devices = get_input_devices()
-    running = await get_running_evtest_processes()
+    async with _inputs_lock:  # Serialize check-then-grab so two concurrent calls can't both grab the same device
+        devices = await get_input_devices()
+        running = await get_running_evtest_processes()
 
-    new_pids = []
-    skipped_devices = 0
-    for path, name in devices.items():
-        if path in running and running[path]:  # Already disabled by running evtest process
-            skipped_devices += 1
-            continue
-        if not os.path.exists(path):
-            logger.error("Input event path not found: %s (%s)", path, name)
-            continue
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "evtest", "--grab", path,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            new_pids.append(proc.pid)
-            logger.info("DISABLED: %s [%s] (pid=%d)", name, path, proc.pid)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Couldn't start evtest and disable input '%s' [%s] (%s)", name, path, e)
+        new_pids = []
+        skipped_devices = 0
+        for path, name in devices.items():
+            if path in running and running[path]:  # Already disabled by running evtest process
+                skipped_devices += 1
+                continue
+            if not os.path.exists(path):
+                logger.error("Input event path not found: %s (%s)", path, name)
+                continue
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "evtest", "--grab", path,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                _active_processes.add(proc)  # So /current_processes reflects long-lived grabbers too
+                new_pids.append(proc.pid)
+                logger.info("DISABLED: %s [%s] (pid=%d)", name, path, proc.pid)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("Couldn't start evtest and disable input '%s' [%s] (%s)", name, path, e)
 
-    return {
-        "success": True,
-        "new_pids": new_pids,
-        "skipped_devices" : skipped_devices,
-    }
+        return {
+            "success": True,
+            "new_pids": new_pids,
+            "skipped_devices" : skipped_devices,
+        }
 
 @register_function("enable_inputs")
 async def handle_enable_inputs(data: Payload) -> dict[str, Any]:  # pylint: disable=unused-argument
     """Re-enable inputs by killing corresponding 'evtest' processes"""
-    devices = get_input_devices()
-    running = await get_running_evtest_processes()
+    async with _inputs_lock:  # Same lock as disable_inputs so the two never interleave on the same device
+        devices = await get_input_devices()
+        running = await get_running_evtest_processes()
 
-    killed_pids = []
-    skipped_devices = 0
-    for path, name in devices.items():
-        pids = running.get(path, [])
-        if not pids:
-            skipped_devices += 1
-            continue
-        for pid in pids:
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGTERM)
-                killed_pids.append(pid)
-                logger.info ("ENABLED: %s [%s] (evtest pid=%d)", name, path, pid)
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.warning("Failed to kill pid %d for %s [%s]: %s", pid, name, path, e)
+        killed_pids = []
+        skipped_devices = 0
+        for path, name in devices.items():
+            pids = running.get(path, [])
+            if not pids:
+                skipped_devices += 1
+                continue
+            for pid in pids:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    killed_pids.append(pid)
+                    logger.info ("ENABLED: %s [%s] (evtest pid=%d)", name, path, pid)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    logger.warning("Failed to kill pid %d for %s [%s]: %s", pid, name, path, e)
+            # Drop any tracked Process objects for this device's pids - they've been signalled, so
+            # they'll exit and shouldn't keep inflating the /current_processes count.
+            for proc in list(_active_processes):
+                if proc.pid in pids:
+                    _active_processes.discard(proc)
 
-    return {
-        "success": True,
-        "killed_pids": killed_pids,
-        "skipped_devices": skipped_devices,
-    }
+        return {
+            "success": True,
+            "killed_pids": killed_pids,
+            "skipped_devices": skipped_devices,
+        }
 
 #### Audio
 @register_function("mute_audio")
@@ -810,6 +855,7 @@ async def handle_unmute_audio(data: Payload) -> dict[str, Any]:
 
     results = []
     success = True
+    volumes: dict[str, int] = {}
     for cmd in commands:
         result = await execute_command(cmd, print_stdout=False, timeout=SHORT_TIMEOUT,
                                        log_prefix="unmute_audio", allow_command=True)
@@ -893,7 +939,10 @@ async def security_middleware(
 
     if REST_BEARER_TOKEN:
         auth_header = request.headers.get("Authorization", "")
-        if auth_header != f"Bearer {REST_BEARER_TOKEN}":
+        # Constant-time comparison: a plain '!=' short-circuits on the first mismatched byte,
+        # which is a timing side-channel an attacker could use to recover the token character by
+        # character over enough requests.
+        if not hmac.compare_digest(auth_header.encode(), f"Bearer {REST_BEARER_TOKEN}".encode()):
             logging.warning("[auth] Invalid REST_BEARER_TOKEN from %s", remote_ip)
             return web.json_response(
                 {"success": False, "error": "Invalid or missing REST_BEARER_TOKEN Authorization token"},
@@ -937,8 +986,11 @@ async def create_app() -> web.Application:
                 logging.debug("Handler error: validation error in %s: %s", name, str(e))  # Debug to avoid noise
                 return web.json_response({"success": False, "error": "Invalid JSON payload"}, status=400)
             except Exception as e:
+                # Full detail (path/argument values, library internals) goes to the server log only -
+                # returning str(e) to the caller would leak that to unauthenticated clients whenever
+                # REST_BEARER_TOKEN isn't set.
                 logging.exception("Handler error for %s: %s", name, str(e))
-                return web.json_response({"success": False, "Internal server error": str(e)}, status=500)
+                return web.json_response({"success": False, "error": "Internal server error"}, status=500)
 
         make_handler.cmd_name = fullname  # type: ignore[attr-defined]
 

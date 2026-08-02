@@ -12,9 +12,9 @@
 """-------------------------------------------------------------------------------
 # HAOS Kiosk Display — Mouse & Touch Input Engine
 # File: MouseTouchInputs
-# Version: 1.3.2
+# Version: 1.4.22
 # Copyright Jeff Kosowsky
-# Date: April 2026
+# Date: August 2026
 #
 #### DESCRIPTION:
    Full-featured X11 parser and command launcher for multi-button press and
@@ -370,13 +370,14 @@ from Xlib import display                  #type: ignore[import-untyped] #pylint:
 from Xlib.xobject.drawable import Window  #type: ignore[import-untyped] #pylint: disable=import-error
 from cdp_client import cdp_navigate_sync
 #-------------------------------------------------------------------------------
-__version__ = "1.3.2"
+__version__ = "1.4.22"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 #-------------------------------------------------------------------------------
 #### User Configuration
 
 XINPUT_RESTART_DELAY: int     = 5    # Seconds before restarting xinput after crash
+CONTACT_GROUP_IDLE_TIMEOUT: float = 30  # Seconds a ContactGroup can go without a RELEASE before it's force-cleared (see ContactGroup._start_idle_timer)
 CMD_TIMEOUT: int | None       = 30   # Seconds before spawned action command timesout or None if no timeout
 GESTURE_CMDS_FILES: list[str] = ["/data/options.json", "gesture_commands.json"]
 DEFAULT_LAUNCH_URL = f"{(os.getenv('HA_URL') or 'about:blank').rstrip('/')}/{os.getenv('HA_DASHBOARD') or ''}".strip('/')
@@ -416,15 +417,6 @@ def parse_args() -> argparse.Namespace:
         "-a", "--allow_all", action="store_true",
         help="DANGEROUS: If true allow all commands -- even if black-listed, not white listed or shell-dangerous")
 
-    parser.add_argument(
-        "-w", "--white_list", type=str, default="$^",
-        help="""
-Regext of allowed commands.
-  - Default is '^$' (no commands allowed).
-  - Set to blank to allow all commands subject to black list.
-  - Set to '.*' to allow all commands
-    Note all commands are subject to the following path restriction: /bin, /usr/bin, /usr/local/bin
-""")
     parser.add_argument(
         "-d", "--debug", type=int, default=0,
         help="""
@@ -507,8 +499,19 @@ SAFE_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(
     r"1\s*>&\s*2"
 )
 
+# Any shell redirection operator (used together with SAFE_REDIRECT_REGEX above: after stripping
+# every *safe* redirection from a command, any operator still matching this means an unsafe
+# redirection target, e.g. writing to an arbitrary file) - see is_command_allowed()
+ANY_REDIRECT_REGEX: Final[re.Pattern[str]] = re.compile(r"\d*\s*>{1,2}|\d*\s*<{1,2}|&\s*>{1,2}")
+
 # Command separators to parse and split
-SEPARATORS: frozenset[str] = frozenset({ "&&", "||", ";", "|", "&", "$(", "${", "`", "(", "{", "[[", "((" })
+# NOTE: '\n' and '\r' are included deliberately - without them, a command string containing an
+# embedded newline (e.g. "echo hi\nrm -rf /media") is treated by shlex.split() as one token
+# stream, so only the *first* program on the first line is ever checked against the
+# whitelist/blacklist below, while the shell=True execution path still hands the whole,
+# untouched string to `/bin/sh -c`, which treats '\n' exactly like ';' - executing every
+# subsequent (unchecked) command. Splitting on them here closes that bypass.
+SEPARATORS: frozenset[str] = frozenset({ "&&", "||", ";", "|", "&", "$(", "${", "`", "(", "{", "[[", "((", "\n", "\r" })
 SEP_REGEX: Final[re.Pattern[str]] = re.compile('(?:' + '|'.join(re.escape(op) for op in sorted(SEPARATORS, key=len, reverse=True)) + ')')
 
 VALID_URL_REGEX: Final[re.Pattern[str]] = re.compile(
@@ -1349,6 +1352,8 @@ class RangeNumber:
             self.range = None
         elif isinstance(s, str):
             s = s.strip()
+            if not s:
+                raise ValueError("Cannot construct RangeNumber from an empty string")
             if s[-1] in ('+', '-'):
                 self.range = s[-1]
                 self.number = int(s[:-1])  # Will raise ValueError if invalid
@@ -1471,6 +1476,16 @@ _DEVICE_NAME_TO_TYPE: dict[str, DeviceType] = {  # Map device_name strings to (f
         for dt in DeviceType if isinstance(dt.spec, DeviceSpec) and not dt in (DeviceType.ANY, DeviceType.DEFAULT)
     }
 debug(4, f"DEVICE_NAME_TO_TYPE={[f'{key}->{value.name}' for key, value in _DEVICE_NAME_TO_TYPE.items()]}" + '\n')
+
+# Reverse lookup from each device's contact "Mechanism" alias (e.g. "Button" for Mouse, "Finger"
+# for Touch - documented in the README's Gesture String Keys section as an alternative to the
+# device-type name itself, e.g. "2_Button_1_Long Click") to its DeviceType.
+_DEVICE_MECHANISM_TO_TYPE: dict[str, DeviceType] = {
+        dt.spec.contact_type.upper(): dt
+        for dt in DeviceType if isinstance(dt.spec, DeviceSpec) and not dt in (DeviceType.ANY, DeviceType.DEFAULT)
+        and dt.spec.contact_type.upper() not in ("GENERIC", "UNKNOWN")
+    }
+debug(4, f"DEVICE_MECHANISM_TO_TYPE={[f'{key}->{value.name}' for key, value in _DEVICE_MECHANISM_TO_TYPE.items()]}" + '\n')
 
 @dataclass(slots=True)
 class GestureCommand:
@@ -1649,7 +1664,13 @@ class GestureCommand:
         cls.GESTURE_CMDS_LIST = new_list[::-1]  # preserve original order
 
     #---- Gesture Command Parsing Regex's ---
-    _DEVICE_TYPE_PATTERN = "|".join({re.escape(dt.name) for dt in DeviceType if dt is not DeviceType.DEFAULT})
+    # Includes both the DeviceType enum names (MOUSE/TOUCH/...) and each device's contact
+    # "Mechanism" alias (Button/Finger) - see _DEVICE_MECHANISM_TO_TYPE - so that documented forms
+    # like "2_Button_1_Long Click" actually match, not just "2_MOUSE_1_Long Click".
+    _DEVICE_TYPE_PATTERN = "|".join(
+        {re.escape(dt.name) for dt in DeviceType if dt is not DeviceType.DEFAULT} |
+        {re.escape(name) for name in _DEVICE_MECHANISM_TO_TYPE}
+    )
     debug(4, f"DEVICE_TYPE_PATTERN={_DEVICE_TYPE_PATTERN}" + '\n')
 
     # _GESTURE_NAMES_PATTERN = "|".join({ # Iterate over all gesture string values for all DeviceTyp, escape entries and join into regex string
@@ -1692,11 +1713,12 @@ class GestureCommand:
         dev_type_raw = m.group("device_type").upper()  # Normalize
         if dev_type_raw == "ANY":
             dev_type = DeviceType.ANY
+        elif dev_type_raw in _DEVICE_NAME_TO_TYPE:
+            dev_type = _DEVICE_NAME_TO_TYPE[dev_type_raw]
+        elif dev_type_raw in _DEVICE_MECHANISM_TO_TYPE:  # Mechanism alias, e.g. "Button"/"Finger"
+            dev_type = _DEVICE_MECHANISM_TO_TYPE[dev_type_raw]
         else:
-            try:
-                dev_type = _DEVICE_NAME_TO_TYPE[dev_type_raw]
-            except KeyError as e:
-                raise ValueError(f"Unknown device type: {dev_type_raw!r}") from e
+            raise ValueError(f"Unknown device type: {dev_type_raw!r}")
 
         # --- gesture ---
         gesture_raw = m.group("gesture").upper()  # Normalize
@@ -1784,9 +1806,19 @@ class GestureCommand:
             if ALLOW_ALL_USER_COMMANDS:
                 return True, "All commands allowed"
 
-            # Extract all programs in the potentially compound command
+            # Reject shell redirection unless it matches one of the explicitly-safe forms
+            # (SAFE_REDIRECT_REGEX, e.g. "> /dev/null", "2>&1"). Otherwise even a whitelisted
+            # program (e.g. "echo") could be used to write/overwrite an arbitrary file the
+            # process can reach (e.g. "echo pwned > /etc/some_file").
+            if ANY_REDIRECT_REGEX.search(SAFE_REDIRECT_REGEX.sub("", command_str)):
+                return False, "Unsafe shell redirection"
+
+            # Extract all programs in the potentially compound command. Strip out already-
+            # validated-safe redirections first (e.g. "2>&1") so their bare '&' isn't misread as
+            # a background-job separator, which would otherwise mis-tokenize a trailing fd number
+            # (e.g. "1") as a program.
             programs = set()
-            parts = SEP_REGEX.split(command_str)
+            parts = SEP_REGEX.split(SAFE_REDIRECT_REGEX.sub(" ", command_str))
             for part in parts:
                 part = part.strip()
                 if not part:
@@ -2192,6 +2224,7 @@ class ContactGroup(RegistryMixin):
         self.current_pressed: list[int] = []             # List of current contact_id's currently in 'Press' state
         self.peak_contacts: int = 0                      # Maximum number of simultaneous contacts in 'Press' state at any time during the contact
         self.peak_contacts_members: set[int] = set()     # List of current contact_ids during first instance of peak_contacts
+        self._idle_timer: threading.Timer | None = None  # Force-clears this group if RELEASE never arrives - see _start_idle_timer()
 
         self.add_event(contact_id, contact_time, contact_pos, ContactState.PRESS)  # Add initial 'Press' event
         self.id: tuple[int, uuid.UUID] = (self.device_id, uuid.uuid4())  #  Unique id, partially indexed by device_id for use in registry
@@ -2201,6 +2234,7 @@ class ContactGroup(RegistryMixin):
         cls = type(self)
         cls._prev_group_added[device_id] = cls._last_group_added.get(device_id)  # Update dictionary of previous group added per device
         cls._last_group_added[device_id] = self                                  # Update  dictionary of last group added per device
+        self._start_idle_timer()
 
     @classmethod
     def last_group_added(cls, device_id: int) -> ContactGroup | None:
@@ -2220,7 +2254,39 @@ class ContactGroup(RegistryMixin):
             for key in list(reg.keys()):
                 dev_id, _ = key
                 if dev_id == device_id:
+                    reg[key]._cancel_idle_timer()  # pylint: disable=protected-access
                     ContactGroup.unregister(key)
+
+    def _start_idle_timer(self) -> None:
+        """Force-clear this group if it never receives a RELEASE for every contact within
+        CONTACT_GROUP_IDLE_TIMEOUT seconds. Without this, a single dropped RELEASE/TouchEnd event
+        (the X server/driver occasionally misses one - see the touch-reliability notes above) means
+        'is_complete' is never True and this group is never unregistered, so it silently absorbs
+        every future PRESS on the device (process_PRESS only starts a new group when the existing
+        one 'is_complete') - permanently breaking gesture recognition for that device until the
+        whole process is restarted. A held click/touch longer than this timeout is not realistic
+        user interaction, so treating it as a lost event and recovering is the safe choice."""
+        def on_idle_timeout() -> None:
+            with _registry_lock:
+                if self.is_complete or not self.is_registered():
+                    return  # Completed normally (or already cleaned up) before the timer fired
+                debug(0, f"WARNING: Forcibly clearing stuck ContactGroup - no RELEASE for "
+                         f"{CONTACT_GROUP_IDLE_TIMEOUT}s (likely a dropped event): {repr(self)}")
+                cls = type(self)
+                if cls._last_group_added.get(self.device_id) is self:
+                    cls._last_group_added[self.device_id] = None
+                if cls._prev_group_added.get(self.device_id) is self:
+                    cls._prev_group_added[self.device_id] = None
+                cls.unregister(self.id)
+
+        self._idle_timer = threading.Timer(CONTACT_GROUP_IDLE_TIMEOUT, on_idle_timeout)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _cancel_idle_timer(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
 
     def add_event(self, contact_id: int, contact_time: float, contact_pos: tuple[int, int], state: ContactState) -> None:
         """Add event for contact_id consisting of current: time, position and state of the specific contact"""
@@ -2247,6 +2313,7 @@ class ContactGroup(RegistryMixin):
                 self.current_pos = contact_pos
             if not self.current_pressed:  # All contacts released
                 self.end_time = contact_time
+                self._cancel_idle_timer()  # Completed normally - no need to force-clear it later
 
     @classmethod
     def is_active(cls, dev_id: int) -> bool:
@@ -2432,6 +2499,18 @@ class GestureSequence(RegistryMixin):
         timer.daemon = False
         timer.start()
 
+def _reset_all_gesture_state() -> None:
+    """Clear all in-flight ContactGroup/GestureSequence state for every device. Used when the
+    single global 'xinput test-xi2 --root' process (it monitors every input device at once, not
+    per-device) gets restarted - see XInputParser._restart_xinput()."""
+    with _registry_lock:
+        device_ids = set(ContactGroup._last_group_added.keys()) | set(GestureSequence._registry().keys())  # pylint: disable=protected-access
+        for device_id in device_ids:
+            ContactGroup.unregister_all(device_id)
+            ContactGroup._last_group_added.pop(device_id, None)  # pylint: disable=protected-access
+            ContactGroup._prev_group_added.pop(device_id, None)  # pylint: disable=protected-access
+            GestureSequence.unregister(device_id)
+
 #-------------------------------------------------------------------------------
 #### XInputEvent and XInputParser classes
 
@@ -2522,6 +2601,13 @@ class XInputParser:
         if self.proc:
             self.proc.terminate()
             self.proc.wait()  # Waits until the process has fully exited
+        # 'xinput test-xi2 --root' is a single process covering EVERY input device at once, so a
+        # restart drops whatever contact was in flight for ALL of them, not just one. Without
+        # clearing state here, a group that was mid-press when xinput died stays registered
+        # forever as that device's last_group_added, and process_PRESS keeps reusing it for every
+        # future press - permanently corrupting peak_contacts/current_pressed until the whole
+        # Python process is restarted.
+        _reset_all_gesture_state()
         time.sleep(XINPUT_RESTART_DELAY)
         self._start_xinput()
 

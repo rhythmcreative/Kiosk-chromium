@@ -1,0 +1,3 @@
+# Test-only dependency. python-xlib and aiohttp (mouse_touch_inputs.py's own runtime deps,
+# see ../Dockerfile's py3-xlib/py3-aiohttp packages) must also be installed to import it.
+pytest
