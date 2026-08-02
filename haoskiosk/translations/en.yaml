@@ -31,6 +31,13 @@ configuration:
   screen_timeout:
     name: "Screen Timeout"
     description: "Time in seconds until screen blanks; 0 for never [Default: 0]"
+  pause_on_screen_off:
+    name: "Pause Rendering When Screen Off"
+    description: |
+      Freeze the browser page while the screen is off (via Screen Timeout or the
+      REST display_off command) so it stops using CPU/GPU for a page nobody can
+      see. The page reloads automatically when the screen comes back on.
+      [Default: True]
   output_number:
     name: "Output Number"
     description: |

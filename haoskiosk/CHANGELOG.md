@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.4.25 - August 2026
+
+- **New: `pause_on_screen_off` (default `true`) freezes the Chromium page while the physical
+  screen is DPMS-blanked**, so it stops all rendering/compositing/JS-timer work for a page
+  nobody can see - previously `display_off`/`screen_timeout` only cut the monitor's power
+  signal (`xset dpms force off`); Chromium kept compositing the dashboard at full rate the
+  entire time regardless. Implemented as a new `ChromiumKiosk._dpms_watch_loop` that polls
+  `xset -q` every 5s (needed since `screen_timeout` blanks the screen via the X server's own
+  idle timer without ever calling into this add-on - REST-hooking `display_on`/`display_off`
+  alone would miss that, the most common case) and, on a detected transition, calls CDP's
+  `Page.setWebLifecycleState` - `"frozen"` on screen-off, `"active"` + a forced `Page.reload`
+  on screen-on. The forced reload on wake (rather than trusting the frozen page's websocket to
+  resume) is a deliberate tradeoff: freezing stops Home Assistant's own frontend connection
+  from being serviced too, so a graceful resume isn't realistic - but unlike a momentary
+  screensaver overlay, this add-on's "screen off" routinely lasts minutes to hours, so a one-
+  time ~1-2s reload flash on wake is a good trade for near-zero rendering work for however
+  long the screen stays off. `kiosk_status` now reports `page_frozen`. Idea and the underlying
+  technique (stop rendering behind something covering the dashboard, unlike freezing a
+  background browser *tab*) both credited to
+  [jxlarrea/kiosk-satellite](https://github.com/jxlarrea/kiosk-satellite)'s "Pause dashboard
+  during screensaver" optimization, adapted here for a DPMS-driven screen (not an in-page
+  overlay) and a CDP-driven browser (not a native Android WebView) - see that project's
+  `docs/optimizations.md` for the original measurements (screensaver case: 152%→57% app CPU,
+  130%→35% renderer CPU, 70%→0% GPU, -20°C).
+- Added `haoskiosk/tests/test_dpms_parsing.py`: unit tests for the `xset -q` output parser and
+  the freeze/unfreeze reaction logic (mocked CDP connection), including that a CDP failure is
+  swallowed rather than destabilizing anything else.
+- config.yaml: `output_number`'s schema was `int(1,2)`, silently rejecting any value above 2
+  even though `run.sh` already supports and gracefully falls back for any number of connected
+  video outputs. Changed to `int(1,)`.
+- `translations/en.yaml`: the REST Bearer Token option's translation was filed under the stale
+  key `rest_authorization_token` instead of `rest_bearer_token` (`config.yaml`'s actual key),
+  so it showed up untranslated (raw key name) in the HA Configuration UI. Fixed the key.
+- `examples/ultrasonic-trigger.py`: `ha_launch_url()` checked `data["result"]["stdout"]` for a
+  `"Monitor is On"` string, but `/launch_url` only ever returns `{"success": bool}` - no
+  `"result"` key at all. The check was therefore always `False` regardless of actual success,
+  silently breaking this example's dashboard-restore-on-exit and URL-rotation logic. Fixed to
+  check the real response shape.
+- Both `README.md`s rewritten for scannability: the add-on's own README (the full reference)
+  went from ~1045 to ~320 lines - configuration options, the REST API, and the gesture grammar
+  are now compact tables instead of one prose subsection per item, and the long
+  `configuration.yaml` `rest_command:` reference block moved into a collapsed `<details>`
+  section. No reference content was removed. Also fixed a broken self-referential link
+  (`haoskiosk/CHANGELOG.md` from a file that's already inside `haoskiosk/`) and two config
+  table rows that named the wrong option keys.
+
 ## v1.4.24 - August 2026
 
 **Performance: avoid building (and immediately discarding) debug-log strings on the per-input-

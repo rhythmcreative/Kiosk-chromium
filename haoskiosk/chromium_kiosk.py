@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.24
+# Version: 1.4.25
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -46,7 +46,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.24"
+__version__ = "1.4.25"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -63,6 +63,20 @@ HEALTH_CHECK_HTTP_TIMEOUT = 2      # Seconds to wait for each poll
 HEALTH_CHECK_FAILURE_THRESHOLD = 2  # Consecutive failed polls before treating Chromium as down
 HARDWARE_GL_RETRY_INTERVAL = 1800  # Seconds of stable software-GL operation before retrying hardware GL
 HARDWARE_GL_RETRY_CHECK_INTERVAL = 60  # How often to check whether that cooldown has elapsed
+DPMS_WATCH_INTERVAL = 5   # Seconds between 'xset -q' polls for screen on/off (see _dpms_watch_loop)
+DPMS_QUERY_TIMEOUT = 3    # Seconds to wait for 'xset -q' before giving up on that poll
+
+
+def parse_dpms_monitor_on(xset_q_output: str) -> bool | None:
+    """Parse 'xset -q' output for DPMS monitor state. Returns True if on, False if
+    off/standby/suspend, or None if the expected 'Monitor is ...' line isn't present at all
+    (DPMS disabled, or unexpected xset output - callers should treat that as 'unknown', not
+    'off'). Pulled out as a pure function so the parsing itself is unit-testable without X11."""
+    for line in xset_q_output.splitlines():
+        line = line.strip()
+        if line.startswith("Monitor is "):
+            return line == "Monitor is On"
+    return None
 
 
 def _single_quote_escape(s: str) -> str:
@@ -120,6 +134,12 @@ class ChromiumKiosk:
         self.browser_refresh = max(_env_float("BROWSER_REFRESH", 600), 0)
         self.dark_mode = _env_bool("DARK_MODE", True)
         self.onscreen_keyboard = _env_bool("ONSCREEN_KEYBOARD", False)
+        # See _dpms_watch_loop: freezes the page (stops all rendering/compositing/timers) while
+        # the physical screen is DPMS-blanked, since nobody can see it either way. Unlike a
+        # transient screensaver overlay, "screen off" here can last minutes to hours, so unlike
+        # freezing being a bad idea for that shorter-lived case, the CPU/GPU/heat savings are
+        # worth a brief reload when the screen comes back on (see _dpms_watch_loop's docstring).
+        self.pause_on_screen_off = _env_bool("PAUSE_ON_SCREEN_OFF", True)
 
         raw_sidebar = (os.getenv("HA_SIDEBAR") or "").strip().lower()
         valid_sidebars = {"full": "", "none": '"always_hidden"', "narrow": '"auto"', "": ""}
@@ -162,6 +182,8 @@ class ChromiumKiosk:
         self._stderr_task: asyncio.Task[None] | None = None
         self._health_check_task: asyncio.Task[None] | None = None
         self._hardware_retry_task: asyncio.Task[None] | None = None
+        self._dpms_watch_task: asyncio.Task[None] | None = None
+        self._page_frozen = False  # Mirrors the page's actual Page.setWebLifecycleState - see _dpms_watch_loop
         # Fire-and-forget tasks spawned via self._spawn() (restarts, auto-login, on-page-loaded
         # hooks) - kept here so nothing relies solely on asyncio.create_task()'s internal weak
         # reference, which per asyncio's own docs can let an in-flight task be garbage-collected.
@@ -199,6 +221,8 @@ class ChromiumKiosk:
         # a one-off transient issue. Periodically give hardware GL another chance instead of
         # sticking with software forever.
         self._hardware_retry_task = asyncio.create_task(self._hardware_retry_loop())
+        if self.pause_on_screen_off:
+            self._dpms_watch_task = asyncio.create_task(self._dpms_watch_loop())
         logger.info("ChromiumKiosk started: %s", self._current_url)
 
         if self.browser_refresh > 0:
@@ -229,7 +253,7 @@ class ChromiumKiosk:
         self._stopping = True
         tasks = [t for t in (
             self._refresh_task, self._watchdog_task, self._health_check_task,
-            self._hardware_retry_task, self._stderr_task,
+            self._hardware_retry_task, self._stderr_task, self._dpms_watch_task,
         ) if t is not None]
         tasks += list(self._background_tasks)
         for t in tasks:
@@ -649,6 +673,78 @@ class ChromiumKiosk:
                 self._spawn(self._restart_browser("Retrying hardware GL after cooldown", clear_software_gl=True))
         except asyncio.CancelledError:
             pass
+
+    async def _dpms_watch_loop(self) -> None:
+        """Freeze the page while the physical screen is DPMS-blanked (via 'screen_timeout' or the
+        REST display_off endpoint - both just flip DPMS state, whether triggered automatically by
+        the X server's own idle timer or on demand), so Chromium stops all rendering/compositing/
+        JS-timer work for a page nobody can see. Unfreezes and force-reloads when the screen comes
+        back on.
+
+        This polls 'xset -q' rather than hooking the REST display_on/off handlers directly,
+        because 'screen_timeout' blanks the screen via the X server's own DPMS idle timer without
+        ever calling into this add-on at all - polling is the only way to notice that case, not
+        just REST-triggered ones.
+
+        Why a full CDP 'Page.setWebLifecycleState' freeze, and not something lighter like just
+        spoofing document.hidden via injected JS: a real freeze is what actually stops Chromium's
+        compositor/GPU work (confirmed to matter - see the CHANGELOG), not just page-visible
+        signals that well-behaved JS might voluntarily honor. The tradeoff is that a frozen page's
+        websocket/timers stop being serviced too, so Home Assistant's own frontend won't reconnect
+        gracefully on its own - we don't try to make that transition graceful, we just force a
+        full reload the moment the screen comes back on instead of trusting the frozen connection
+        to resume. That's the right tradeoff here specifically: unlike a transient screensaver
+        overlay (seconds to a couple minutes), our screen-off state routinely lasts minutes to
+        hours, so the CPU/GPU/heat saved dwarfs a one-time ~1-2s reload flash when someone actually
+        looks at the screen again.
+        """
+        was_on = True
+        try:
+            while True:
+                await asyncio.sleep(DPMS_WATCH_INTERVAL)
+                if self._stopping or self.conn is None or self._restart_lock.locked():
+                    continue
+                is_on = await self._query_dpms_on()
+                if is_on is None or is_on == was_on:
+                    continue  # Unknown (xset failed) or no transition - nothing to do
+                was_on = is_on
+                await self._handle_dpms_transition(is_on)
+        except asyncio.CancelledError:
+            pass
+
+    async def _handle_dpms_transition(self, is_on: bool) -> None:
+        """React to a screen on/off transition. Split out from _dpms_watch_loop's polling loop so
+        the reaction itself is directly callable/testable without a real 'xset -q' subprocess."""
+        assert self.conn is not None
+        try:
+            if not is_on:
+                await self.conn.send("Page.setWebLifecycleState", {"state": "frozen"})
+                self._page_frozen = True
+                logger.info("Screen off (DPMS): froze the page to stop rendering")
+            else:
+                await self.conn.send("Page.setWebLifecycleState", {"state": "active"})
+                self._page_frozen = False
+                logger.info("Screen on (DPMS): unfroze the page and forcing a reload")
+                await self.reload(ignore_cache=False)
+        except Exception as e:  # pylint: disable=broad-except
+            # Never let this optimization become a new source of instability - a failure here
+            # just means we stay unfrozen (or try again next transition), not a crash.
+            logger.warning("[_dpms_watch_loop] Failed to change page lifecycle state: %s", e)
+            self._page_frozen = False
+
+    async def _query_dpms_on(self) -> bool | None:
+        """Return whether the monitor is currently on per 'xset -q', or None if that couldn't be
+        determined (xset failed, timed out, or produced unexpected output)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xset", "-q",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=DPMS_QUERY_TIMEOUT)
+        except (OSError, asyncio.TimeoutError) as e:
+            logger.debug("[_dpms_watch_loop] xset -q failed: %s", e)
+            return None
+        return parse_dpms_monitor_on(stdout.decode(errors="replace"))
 
     async def _restart_browser(self, reason: str, clear_software_gl: bool = False) -> None:
         if self._restart_lock.locked() or self._stopping:

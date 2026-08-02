@@ -132,6 +132,7 @@ load_config_var LOGIN_DELAY 1.0
 load_config_var ZOOM_LEVEL 100
 load_config_var BROWSER_REFRESH 600
 load_config_var SCREEN_TIMEOUT 600  # Default to 600 seconds
+load_config_var PAUSE_ON_SCREEN_OFF true  # Freeze the page while DPMS-blanked - see chromium_kiosk.py
 load_config_var OUTPUT_NUMBER 1  # Which *CONNECTED* Physical video output to use (Defaults to 1)
 #NOTE: By only considering *CONNECTED* output, this maximizes the chance of finding an output
 #      without any need to change configs. Set to 1, unless you have multiple video outputs connected.

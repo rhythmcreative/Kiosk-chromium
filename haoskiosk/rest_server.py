@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: rest_server.py
-# Version: 1.4.24
+# Version: 1.4.25
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -75,7 +75,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.24"
+__version__ = "1.4.25"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -535,6 +535,10 @@ async def handle_kiosk_status(data: Payload) -> dict[str, Any]:  # pylint: disab
         "seconds_on_software_gl": software_gl_since,
         "current_url": KIOSK._current_url,  # pylint: disable=protected-access
         "consecutive_load_failures": KIOSK._consecutive_failures,  # pylint: disable=protected-access
+        # True while the page is frozen because the screen is DPMS-blanked (see
+        # ChromiumKiosk._dpms_watch_loop / the PAUSE_ON_SCREEN_OFF option) - expected and
+        # harmless, but worth surfacing since a frozen page's websocket/timers aren't running.
+        "page_frozen": KIOSK._page_frozen,  # pylint: disable=protected-access
         # Chromium's own authoritative GPU status (same data chrome://gpu reads from) - the
         # gl_mode/forced_software_gl fields above only reflect which launch flags we used and
         # whether the process stayed up, not whether GPU compositing/rasterization/WebGL are

@@ -3,7 +3,7 @@
 Display HA dashboards in kiosk mode on your HAOS server, using a regular
 Chromium browser.
 
-**Maintainer:** rhythmcreative · **Version:** 1.4.24 (August 2026) · Fork of
+**Maintainer:** rhythmcreative · **Version:** 1.4.25 (August 2026) · Fork of
 [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff Kosowsky,
 driving Chromium via CDP instead of Luakit. See the
 [CHANGELOG](CHANGELOG.md).
@@ -56,6 +56,7 @@ Trouble installing, or with displays/touchscreens? See
 | `zoom_level` | `100` | Percent zoom. |
 | `browser_refresh` | `600` sec | Periodic reload; `0` disables. Recommended — console errors can otherwise overwrite the dashboard on default RPi configs. |
 | `screen_timeout` | `0` | Seconds before the screen blanks; `0` = never. |
+| `pause_on_screen_off` | `true` | Freezes the browser page while the screen is off (via `screen_timeout` or `display_off`), so it stops using CPU/GPU for a page nobody can see. Reloads automatically the moment the screen comes back on — expect a brief (~1-2s) reload flash on wake, traded for near-zero rendering work during the (often much longer) time the screen is off. |
 | `output_number` | `1` | Which *connected* video output to use. Leave at `1` unless you have multiple outputs. |
 | `dark_mode` | `true` | Prefers dark mode. Only takes effect on HA pages if the user profile's Theme is `auto`; profile `light`/`dark` and `ha_theme` (below) take precedence. |
 | `ha_theme` | `""` | Force a specific HA theme. `{"dark":true}` / `{"dark":false}` force dark/light for HA dashboards; blank/`{}`/`"Home Assistant"` = auto, governed by `dark_mode`. |
@@ -90,7 +91,7 @@ token can, on whichever `rest_ip` you configured. `run_command(s)`/`xset`/
 |---|---|---|---|
 | `launch_url` | POST | `{"url": "..."}` (optional) | Navigate the kiosk tab. No body = default dashboard. |
 | `refresh_browser` | POST | — | Reload the page. |
-| `kiosk_status` | GET | — | Full state: running?, hardware/software GL, current URL, load-failure count, and `gpu_info` (Chromium's real GPU feature status — the only reliable way to tell if compositing/rasterization/WebGL are *actually* hardware-accelerated). Check this if the dashboard feels laggy. |
+| `kiosk_status` | GET | — | Full state: running?, hardware/software GL, current URL, load-failure count, `page_frozen` (see `pause_on_screen_off`), and `gpu_info` (Chromium's real GPU feature status — the only reliable way to tell if compositing/rasterization/WebGL are *actually* hardware-accelerated). Check this if the dashboard feels laggy. |
 | `is_display_on` | GET | — | Boolean. |
 | `display_on` | POST | `{"timeout": N}` (optional) | Turn screen on; `0` = never blank again. |
 | `display_off` | POST | — | Turn screen off. |
