@@ -149,4 +149,4 @@ configuration:
     name: "Debug Mode"
     description: |
       Launch X and Openbox but not the Chromium browser. [Default: False]
-      Manually access using: sudo docker -exec -it addon_haoskiosk bash
+      Manually access using: sudo docker exec -it addon_haoskiosk bash

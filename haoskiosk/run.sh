@@ -131,7 +131,7 @@ load_config_var HA_DASHBOARD ""
 load_config_var LOGIN_DELAY 1.0
 load_config_var ZOOM_LEVEL 100
 load_config_var BROWSER_REFRESH 600
-load_config_var SCREEN_TIMEOUT 600  # Default to 600 seconds
+load_config_var SCREEN_TIMEOUT 0  # Default to 0 (never blank) - matching config.yaml
 load_config_var PAUSE_ON_SCREEN_OFF true  # Freeze the page while DPMS-blanked - see chromium_kiosk.py
 load_config_var OUTPUT_NUMBER 1  # Which *CONNECTED* Physical video output to use (Defaults to 1)
 #NOTE: By only considering *CONNECTED* output, this maximizes the chance of finding an output
@@ -144,7 +144,7 @@ load_config_var MAP_TOUCH_INPUTS true
 load_config_var CURSOR_TIMEOUT 5  # Default to 5 seconds
 load_config_var BROWSER_LANGUAGE ""  # Consumed by chromium_kiosk.py (Chromium --lang + CDP locale override)
 load_config_var KEYBOARD_LAYOUT us
-load_config_var ONSCREEN_KEYBOARD false
+load_config_var ONSCREEN_KEYBOARD true  # Default True, matching config.yaml
 load_config_var SAVE_ONSCREEN_CONFIG true
 load_config_var XORG_CONF ""
 load_config_var XORG_APPEND_REPLACE append

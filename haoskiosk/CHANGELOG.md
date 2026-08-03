@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.26 - August 2026
+
+- **Fix (bug): `/health` and unknown REST routes returned HTTP 500** — the security middleware
+  did `getattr(handler, "cmd_name")` for every route, but the `/health` lambda and the catch-all
+  404 handler have no such attribute, so they raised `AttributeError` → 500 instead of 200/404.
+  Now `getattr(handler, "cmd_name", None)` — `/health` returns 200 and unknown routes return 404.
+- **Security: don't trust `X-Forwarded-For` for the localhost check** — the previous fallback was
+  spoofable ("X-Forwarded-For: 127.0.0.1") and could bypass the protected-command gate when
+  `request.remote` is unset. Only the real TCP peer is trusted now.
+- **Dropped `armhf` and `i386` from `arch`**: Alpine v3.24 publishes Chromium only for
+  x86_64/aarch64/armv7, so builds for armhf/i386 always failed at install; HA is deprecating
+  32-bit anyway. Supported: `aarch64`, `amd64`, `armv7`.
+- **New CI/CD (.github/workflows) + prebuilt images**: `build.yml` publishes prebuilt multi-arch
+  images to `ghcr.io` on push to main (via `home-assistant/builder`) — `config.yaml` now sets
+  `image:` so users no longer compile on install — and validates the build on PRs. `ci.yml` runs
+  the test suite + pre-commit (shellcheck/codespell/mdformat) on push/PR.
+- **New `watchdog`** pointing at `/[HOST]:[PORT:8080]/health` so the Supervisor restarts the
+  add-on if the REST server hangs (requires `/health` fix above).
+- Removed the broken `sync-readme-jjk` pre-commit hook (called a nonexistent GitHub workflow) and
+  the no-op `exclude: ^$`.
+- `cdp_client.py`: `asyncio.get_event_loop()` → `get_running_loop()` (deprecated).
+- `translations/en.yaml`: fixed `docker -exec` → `docker exec` typo.
+- `run.sh`: aligned debug fallback defaults with config.yaml (`SCREEN_TIMEOUT 0`,
+  `ONSCREEN_KEYBOARD true`).
+- tests/requirements-test.txt now includes `aiohttp` and `python-xlib` (module imports needed by
+  the suite).
+
 ## v1.4.25 - August 2026
 
 - **New: `pause_on_screen_off` (default `true`) freezes the Chromium page while the physical

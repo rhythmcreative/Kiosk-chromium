@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: rest_server.py
-# Version: 1.4.25
+# Version: 1.4.26
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -75,7 +75,7 @@ from aiohttp import web  #type: ignore[import-not-found] #pylint: disable=import
 from chromium_kiosk import ChromiumKiosk
 
 #-------------------------------------------------------------------------------
-__version__ = "1.4.25"
+__version__ = "1.4.26"
 __author__ = "Jeff Kosowsky"
 __copyright__ = "Copyright 2025-2026 Jeff Kosowsky"
 
@@ -942,7 +942,11 @@ async def security_middleware(
     If the token is missing or invalid → returns HTTP 401 immediately.
     Otherwise passes the request to the next handler.
     """
-    remote_ip = request.remote or request.headers.get("X-Forwarded-For", "unknown").split(",")[0].strip()
+    # Only trust the actual TCP peer (request.remote) for the localhost check. The previous
+    # fallback to X-Forwarded-For is spoofable (an attacker can send "X-Forwarded-For: 127.0.0.1")
+    # and would let them impersonate localhost whenever request.remote is None (e.g. behind a
+    # proxy/unix socket). request.remote is essentially never None for real TCP connections.
+    remote_ip = request.remote or "unknown"
     logging.debug("[request] %s %s from %s", request.method, request.path, remote_ip)  # Log every request for debug
 
     if REST_BEARER_TOKEN:
@@ -956,9 +960,12 @@ async def security_middleware(
                 {"success": False, "error": "Invalid or missing REST_BEARER_TOKEN Authorization token"},
                 status=401,)
 
-    cmd_name = getattr(handler, "cmd_name")
+    # getattr with a default: handlers that aren't wrapped by make_handler (the /health lambda and
+    # the catch-all 404) have no `cmd_name` attribute, and a bare getattr here raised
+    # AttributeError for them, turning /health and unknown routes into 500s instead of 200/404.
+    cmd_name = getattr(handler, "cmd_name", None)
     if cmd_name in PROTECTED_COMMANDS:
-        if  remote_ip not in ("127.0.0.1", "::1", "localhost") and REST_BEARER_TOKEN is None:
+        if remote_ip not in ("127.0.0.1", "::1", "localhost") and REST_BEARER_TOKEN is None:
             logging.warning("[security] Blocked protected REST command '%s' from non-localhost IP: %s", cmd_name, remote_ip)
             return web.json_response({
                 "success": False,

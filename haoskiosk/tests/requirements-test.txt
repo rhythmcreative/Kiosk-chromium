@@ -1,3 +1,7 @@
-# Test-only dependency. python-xlib and aiohttp (mouse_touch_inputs.py's own runtime deps,
-# see ../Dockerfile's py3-xlib/py3-aiohttp packages) must also be installed to import it.
+# Test dependencies. pytest is the runner; aiohttp and python-xlib are mouse_touch_inputs.py /
+# chromium_kiosk.py / rest_server.py / cdp_client.py's own runtime deps (see ../Dockerfile's
+# py3-aiohttp / py3-xlib packages) and must be importable for the shared modules to load.
 pytest
+aiohttp
+python-xlib
+

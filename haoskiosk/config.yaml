@@ -4,16 +4,22 @@ description: |
   Start X server and Chromium browser on local HAOS server and display
   dashboards in kiosk mode. Fork of HAOS-kiosk by Jeff Kosowsky, adapted to
   drive regular Chromium via the Chrome DevTools Protocol instead of Luakit.
-version: "1.4.25"
+version: "1.4.26"
 slug: "haoskiosk"
 url: https://github.com/rhythmcreative/Kiosk-chromium/tree/main/haoskiosk
+
+# Prebuilt multi-arch images published to GitHub Container Registry by the 'Build add-on'
+# workflow (.github/workflows/build.yml) - '{arch}' is substituted by the Supervisor.
+# Without this, every user compiles the whole Xorg+Chromium image locally on install.
+image: ghcr.io/rhythmcreative/{arch}-haoskiosk
 
 arch:
   - aarch64
   - amd64
-  - armhf
+  # armv7 only: Alpine v3.24 publishes Chromium for x86_64/aarch64/armv7.
   - armv7
-  - i386
+  # armhf and i386 intentionally removed: Alpine has NO chromium package for them, so
+  # the build would fail, and Home Assistant is deprecating 32-bit architectures anyway.
 
 startup: application
 host_network: true
@@ -23,6 +29,12 @@ homeassistant_api: true
 auth_api: true
 audio: true
 usb: true
+
+# Supervisor health check: because /health lives on the REST port (default 8080) and this
+# add-on runs with host_network, point the watchdog at [HOST]:[PORT:8080]. If your REST
+# server binds only to 127.0.0.1 and the Supervisor probes from a different source address,
+# the check may not reach it - in that case either set rest_ip to 0.0.0.0 or remove this.
+watchdog: "http://[HOST]:[PORT:8080]/health"
 
 ulimits:
   nofile:

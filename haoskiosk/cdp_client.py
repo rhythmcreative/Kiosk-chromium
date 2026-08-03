@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: cdp_client.py
-# Version: 1.4.25
+# Version: 1.4.26
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -190,7 +190,7 @@ class CDPConnection:
     async def send(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
         """Send a CDP command and wait for its matching response."""
         msg_id = next(self._id_counter)
-        fut: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
         await self._ws.send_json({"id": msg_id, "method": method, "params": params or {}})
         try:
