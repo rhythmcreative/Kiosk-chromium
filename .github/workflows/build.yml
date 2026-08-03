@@ -6,52 +6,88 @@ on:
     paths:
       - '.github/workflows/build.yml'
       - 'haoskiosk/**'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build.yml'
-      - 'haoskiosk/**'
+  workflow_dispatch:
 
-# Reference: https://github.com/home-assistant/actions/tree/master/builder
+# Uses the current official composable Home Assistant builder actions
+# (home-assistant/builder/actions/*) which replaced the deprecated monolithic
+# `home-assistant/builder`. Only amd64 + aarch64 are supported by these actions,
+# so those are the only arches we publish (and the only ones in config.yaml's `arch`).
 env:
-  BUILD_TARGET: haoskiosk  # must match the add-on slug
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  IMAGE_NAME: haoskiosk
+  BUILDER_VERSION: 2026.03.2
+  CONTEXT: ./haoskiosk   # the add-on lives in a subfolder (Dockerfile lives there)
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  init:
+    name: Prepare build matrix
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3.3.0
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
 
-      # Validate the add-on actually builds (and the config.yaml is valid) on every PR.
-      # Only amd64 is tested on PRs to keep them fast; all arches build on push.
-      - name: Build add-on (PR validation, amd64 only)
-        if: github.event_name == 'pull_request'
-        uses: home-assistant/builder@2026.03.2
-        with:
-          args: |
-            --amd64 \
-            --test \
-            --target ${{ env.BUILD_TARGET }} \
-            --image "ghcr.io/${{ github.repository_owner }}/{arch}-${{ env.BUILD_TARGET }}"
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: init
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write   # x OIDC for cosign signing
+      packages: write   # x push to GHCR
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
 
-      # On push to main: build + push prebuilt images for every arch in config.yaml
-      # (aarch64/amd64/armv7) so users don't have to compile locally on install.
-      - name: Build & push add-on (all arches)
-        if: github.event_name == 'push'
-        uses: home-assistant/builder@2026.03.2
+      - name: Get add-on version from config.yaml
+        id: version
+        run: echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.arch }} image
+        uses: home-assistant/builder/actions/build-image@2026.03.2
         with:
-          args: |
-            --all \
-            --target ${{ env.BUILD_TARGET }} \
-            --image "ghcr.io/${{ github.repository_owner }}/{arch}-${{ env.BUILD_TARGET }}"
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: ${{ env.CONTEXT }}
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ steps.version.outputs.version }}
+            latest
+          push: "true"
+          version: ${{ steps.version.outputs.version }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [ init, build ]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Get add-on version from config.yaml
+        id: version
+        run: echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: |
+            ${{ steps.version.outputs.version }}
+            latest

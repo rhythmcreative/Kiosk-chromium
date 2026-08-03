@@ -53,4 +53,3 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
-

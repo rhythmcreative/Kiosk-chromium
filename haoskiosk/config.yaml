@@ -13,13 +13,12 @@ url: https://github.com/rhythmcreative/Kiosk-chromium/tree/main/haoskiosk
 # Without this, every user compiles the whole Xorg+Chromium image locally on install.
 image: ghcr.io/rhythmcreative/{arch}-haoskiosk
 
+# Only arches the official Home Assistant builder (home-assistant/builder/actions) can
+# cross-build on GitHub-hosted runners. armv7/armhf/i386 are 32-bit: HA is deprecating them,
+# the current builder doesn't support them, and Alpine has no Chromium package for armhf/i386.
 arch:
   - aarch64
   - amd64
-  # armv7 only: Alpine v3.24 publishes Chromium for x86_64/aarch64/armv7.
-  - armv7
-  # armhf and i386 intentionally removed: Alpine has NO chromium package for them, so
-  # the build would fail, and Home Assistant is deprecating 32-bit architectures anyway.
 
 startup: application
 host_network: true

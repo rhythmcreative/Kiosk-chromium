@@ -9,13 +9,13 @@
 - **Security: don't trust `X-Forwarded-For` for the localhost check** — the previous fallback was
   spoofable ("X-Forwarded-For: 127.0.0.1") and could bypass the protected-command gate when
   `request.remote` is unset. Only the real TCP peer is trusted now.
-- **Dropped `armhf` and `i386` from `arch`**: Alpine v3.24 publishes Chromium only for
-  x86_64/aarch64/armv7, so builds for armhf/i386 always failed at install; HA is deprecating
-  32-bit anyway. Supported: `aarch64`, `amd64`, `armv7`.
+- **Dropped all 32-bit arches (`armhf`, `i386`, `armv7`)**: the current official Home Assistant
+  builder (`home-assistant/builder/actions/*`) only cross-builds `amd64` + `aarch64`, HA is
+  deprecating 32-bit, and Alpine has no Chromium for armhf/i386. Supported: `aarch64`, `amd64`.
 - **New CI/CD (.github/workflows) + prebuilt images**: `build.yml` publishes prebuilt multi-arch
-  images to `ghcr.io` on push to main (via `home-assistant/builder`) — `config.yaml` now sets
-  `image:` so users no longer compile on install — and validates the build on PRs. `ci.yml` runs
-  the test suite + pre-commit (shellcheck/codespell/mdformat) on push/PR.
+  images to `ghcr.io` on push to main using the current composable builder actions — `config.yaml`
+  now sets `image:` so users no longer compile on install. `ci.yml` runs the test suite +
+  pre-commit (codespell/shellcheck/safety checks) on push/PR.
 - **New `watchdog`** pointing at `/[HOST]:[PORT:8080]/health` so the Supervisor restarts the
   add-on if the REST server hangs (requires `/health` fix above).
 - Removed the broken `sync-readme-jjk` pre-commit hook (called a nonexistent GitHub workflow) and

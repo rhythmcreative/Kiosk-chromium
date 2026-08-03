@@ -25,7 +25,13 @@ jobs:
       - name: Run pytest
         run: pytest -v haoskiosk/tests
 
-      # pre-commit config runs mdformat, prettier-style hooks, beautysh, codespell and
-      # shellcheck -- catches formatting/style/shell errors that pytest wouldn't.
-      - name: Pre-commit hooks
+      # pre-commit config runs mdformat, beautysh, codespell, shellcheck and the
+      # pre-commit-hooks safety checks. mdformat & beautysh are *reformatters* - in CI there's
+      # no way to commit their output, so they'd fail the run on any file they rewrite. They're
+      # meant to be run locally (and committed) by the maintainer; CI skips them and enforces
+      # everything that only *checks*. Run locally before pushing:
+      #   pre-commit run --all-files
+      - name: Pre-commit hooks (skip reformatters)
+        env:
+          SKIP: mdformat,beautysh
         uses: pre-commit/action@v3.0.1
