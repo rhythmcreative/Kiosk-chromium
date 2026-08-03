@@ -55,7 +55,8 @@ jobs:
 
       - name: Get add-on version from config.yaml
         id: version
-        run: echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ${{ matrix.arch }} image
         uses: home-assistant/builder/actions/build-image@2026.03.2
@@ -80,7 +81,8 @@ jobs:
     steps:
       - name: Get add-on version from config.yaml
         id: version
-        run: echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(sed -n 's/^version: *"\(.*\)"/\1/p' haoskiosk/config.yaml)" >> "$GITHUB_OUTPUT"
 
       - name: Publish multi-arch manifest
         uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
