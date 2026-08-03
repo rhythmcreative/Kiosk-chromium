@@ -37,7 +37,7 @@ jobs:
       # Only amd64 is tested on PRs to keep them fast; all arches build on push.
       - name: Build add-on (PR validation, amd64 only)
         if: github.event_name == 'pull_request'
-        uses: home-assistant/builder@2024.01
+        uses: home-assistant/builder@2026.06.0
         with:
           args: |
             --amd64 \
@@ -49,7 +49,7 @@ jobs:
       # (aarch64/amd64/armv7) so users don't have to compile locally on install.
       - name: Build & push add-on (all arches)
         if: github.event_name == 'push'
-        uses: home-assistant/builder@2024.01
+        uses: home-assistant/builder@2026.06.0
         with:
           args: |
             --all \
