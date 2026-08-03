@@ -49,6 +49,8 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
+        # 'hass' (Home Assistant shorthand) is not a typo - codespell wants to change it to 'hash'.
+        args: [--ignore-words-list, hass]
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1
     hooks:
