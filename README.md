@@ -18,7 +18,7 @@
 
 This project provides a Chromium-based kiosk for Home Assistant.
 
-It is a fork of `HAOS-kiosk` that replaces Luakit with Chromium and uses WebGPU for Voice-satelite.
+It is a fork of [`HAOS-kiosk`](https://github.com/puterboy/HAOS-kiosk) that replaces Luakit with Chromium and uses WebGPU for Voice-satelite.
 
 It is designed for a simple and reliable Home Assistant kiosk experience.
 
