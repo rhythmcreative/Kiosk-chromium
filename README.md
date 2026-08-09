@@ -12,29 +12,41 @@
 
 </div>
 
-Home Assistant dashboards in kiosk mode on your HAOS server — using stock
-**Chromium** instead of a niche WebKit browser.
 
-Fork of [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff
-Kosowsky, driving Chromium via the Chrome DevTools Protocol (CDP) instead of
-Luakit. Full history: [CHANGELOG](haoskiosk/CHANGELOG.md) ·
-[Releases](https://github.com/rhythmcreative/Kiosk-chromium/releases).
+  
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=23&pause=1000&color=F7F7F7&vCenter=true&width=435&height=30&lines=ABOUT)](https://git.io/typing-svg)
 
-## Why this fork
+This project provides a Chromium-based kiosk for Home Assistant.
 
-- **Real Chromium** — same engine as a desktop browser, so modern HA
-  frontends, custom cards, and heavy JS dashboards just work.
-- **Automatic GPU fallback** — tries hardware rendering first, drops to
-  software if that fails, so it comes up reliably on any board.
-- Everything else you'd expect: auto-login, dark/light mode, sidebar/theme
-  forcing, periodic refresh, crash recovery, touch gestures, REST API.
+It is a fork of `HAOS-kiosk` that replaces Luakit with Chromium and uses WebGPU for Voice-satelite.
 
-## Install
+It is designed for a simple and reliable Home Assistant kiosk experience.
+
+______________________________________________________________________
+
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=23&pause=1000&color=F7F7F7&vCenter=true&width=435&height=30&lines=FEATURES)](https://git.io/typing-svg)
+
+- Home Assistant auto-login
+- Dark / light mode support
+- Sidebar control
+- Theme forcing
+- Automatic periodic refresh
+- Crash recovery
+- Touch gestures
+- Support for modern Home Assistant dashboards and custom cards
+
+______________________________________________________________________
+
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=23&pause=1000&color=F7F7F7&vCenter=true&width=435&height=30&lines=INSTALL)](https://git.io/typing-svg)
 
 1. HA → **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
 2. Add `https://github.com/rhythmcreative/Kiosk-chromium`
 3. Install **Kiosk Chromium Display**, set your HA username/password under
    **Configuration**, then **Start**.
 
+(Or use the button below for a more easier install)
+
 [![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Frhythmcreative%2FKiosk-chromium)
+
+______________________________________________________________________
 
