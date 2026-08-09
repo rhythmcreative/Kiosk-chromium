@@ -1,5 +1,17 @@
 <h1 align="center">Kiosk-chromium </h1>
 
+<div align="center">
+
+<p><i> Chromium kiosk setup for Home Assistant. </i></p>
+
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
+[![Chromium](https://img.shields.io/badge/Chromium-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://www.chromium.org/)
+[![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://www.linux.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+
+</div>
+
 Home Assistant dashboards in kiosk mode on your HAOS server — using stock
 **Chromium** instead of a niche WebKit browser.
 
