@@ -1,4 +1,4 @@
-# Kiosk-chromium
+<h1 align="center">Kiosk-chromium </h1>
 
 Home Assistant dashboards in kiosk mode on your HAOS server — using stock
 **Chromium** instead of a niche WebKit browser.
