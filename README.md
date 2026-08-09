@@ -50,8 +50,6 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-> **Important:** Remeber is important on the configuration to put `Username` and `Password` for the configuraction to work correctly.
-
 <div align="center">
 
 <p>Made with ❤️ from rhythmcreative.</p>
