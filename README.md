@@ -33,6 +33,7 @@ ______________________________________________________________________
 - Automatic periodic refresh
 - Crash recovery
 - Touch gestures
+- Voice Satellite auto-start — hands-free wake word on boot, no manual tapping ([Voice Satellite](https://github.com/jxlarrea/voice-satellite-card-integration) required)
 - Support for modern Home Assistant dashboards and custom cards
 
 ______________________________________________________________________
