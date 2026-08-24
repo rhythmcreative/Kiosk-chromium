@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.4.27 - August 2026
+
+- **New: `voice_satellite` (default `false`) - hands-free auto-start of
+  [Voice Satellite](https://github.com/jxlarrea/voice-satellite-card-integration)**, the HACS
+  integration that turns any browser into an `assist_satellite` with wake-word detection.
+  Until now, every kiosk boot/reload parked Voice Satellite behind its floating "tap to start"
+  button (browsers refuse mic capture without a user gesture, and the Chromium profile is wiped
+  on each launch so a persisted "allow" never survives). With this option on, the add-on now:
+    - pre-grants microphone access for the HA origin via CDP `Browser.grantPermissions`
+      (`audioCapture`) right after launch, before the first page finishes loading;
+    - passes `--unsafely-treat-insecure-origin-as-secure` when `ha_url` is plain http, so
+      `getUserMedia` exists at all without HTTPS (browser-side equivalent of the official
+      Android Kiosk Satellite app's secure-context loopback proxy);
+    - watches each page load for Voice Satellite's floating start button and taps it via CDP
+      `Input.dispatchMouseEvent` (a *trusted* input event carrying real user activation, which
+      a JS `.click()` would not be) - up to 3 taps within 45s per load, then logs and gives up.
+  Result: wake word comes up by itself on boot, after periodic refreshes, and after
+  websocket-recovery reloads. Requires the Voice Satellite integration installed in HA and its
+  satellite entity assigned to this browser in the sidebar panel (one-time setup). Note the
+  existing screen-off tradeoff still applies: with `pause_on_screen_off` or a non-zero
+  `screen_timeout`, the frozen page stops hosting the wake-word engine too - keep the screen
+  always on for always-listening voice; the add-on logs a warning when both are combined.
+
 ## v1.4.26 - August 2026
 
 - **Fix (bug): `/health` and unknown REST routes returned HTTP 500** — the security middleware

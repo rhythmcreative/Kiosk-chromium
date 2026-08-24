@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.26
+# Version: 1.4.27
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -18,6 +18,13 @@ over CDP once Chromium is launched with '--remote-debugging-port':
     "Force Dark" heuristic, which would otherwise visually distort the HA UI)
   - Unhandled-rejection suppression + HA websocket recovery watchdog, injected
     via Page.addScriptToEvaluateOnNewDocument so they run on every navigation
+  - Voice Satellite auto-start ('voice_satellite' option): microphone access is
+    pre-granted over CDP so the browser never prompts or blocks on a missing
+    user gesture, plain-http HA instances are treated as a secure origin so
+    getUserMedia works without HTTPS, and if Voice Satellite's floating
+    'tap to start' button still appears it is tapped automatically via CDP
+    input events - so voice comes up hands-free on boot instead of requiring
+    a manual tap after every restart/reload
   - Periodic browser refresh (native Page.reload, with periodic hard/cache-busting reload)
   - Restart Chromium after consecutive main-document load failures, falling back
     from hardware (EGL) to software (SwiftShader) GL if Chromium fails to start
@@ -46,7 +53,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.26"
+__version__ = "1.4.27"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -65,6 +72,15 @@ HARDWARE_GL_RETRY_INTERVAL = 1800  # Seconds of stable software-GL operation bef
 HARDWARE_GL_RETRY_CHECK_INTERVAL = 60  # How often to check whether that cooldown has elapsed
 DPMS_WATCH_INTERVAL = 5   # Seconds between 'xset -q' polls for screen on/off (see _dpms_watch_loop)
 DPMS_QUERY_TIMEOUT = 3    # Seconds to wait for 'xset -q' before giving up on that poll
+# Voice Satellite auto-start (see _voice_satellite_autostart): Voice Satellite's own engine
+# tries to auto-start once a satellite entity is assigned, but if the browser blocks mic
+# capture for lack of a user gesture it parks behind a floating 'tap to start' button.
+# Poll this often / at most this long after each page load for that button to appear,
+# and tap it over CDP so the user never has to.
+VS_AUTOSTART_POLL_INTERVAL = 1.0  # Seconds between polls for the floating start button
+VS_AUTOSTART_MAX_WAIT = 45        # Total seconds to keep watching after each page load
+VS_AUTOSTART_MAX_TAPS = 3         # Give up tapping after this many failed attempts
+VS_AUTOSTART_RECHECK_DELAY = 3.0  # Seconds to wait after a tap before verifying it worked
 
 
 def parse_dpms_monitor_on(xset_q_output: str) -> bool | None:
@@ -161,13 +177,30 @@ class ChromiumKiosk:
         # silently failing to apply the requested language.
         self.browser_language = (os.getenv("BROWSER_LANGUAGE") or "").strip().replace("_", "-")
 
+        # Voice Satellite auto-start: pre-grant mic access, treat plain-http HA as a secure
+        # origin, and tap Voice Satellite's floating start button if it ever shows up - so
+        # the wake-word engine comes up on boot without a manual tap (mirrors what the
+        # official Android Kiosk Satellite app does natively, within browser limits).
+        self.voice_satellite = _env_bool("VOICE_SATELLITE", False)
+
         logger.info(
             "ChromiumKiosk config: URL=%s DARK_MODE=%s SIDEBAR=%s THEME=%s LANGUAGE=%s LOGIN_DELAY=%.1f "
-            "ZOOM_LEVEL=%d BROWSER_REFRESH=%d ONSCREEN_KEYBOARD=%s",
+            "ZOOM_LEVEL=%d BROWSER_REFRESH=%d ONSCREEN_KEYBOARD=%s VOICE_SATELLITE=%s",
             self.initial_url, self.dark_mode, raw_sidebar, theme or "(none)",
             self.browser_language or "(default)",
             self.login_delay, self.zoom_level, self.browser_refresh, self.onscreen_keyboard,
+            self.voice_satellite,
         )
+        if self.voice_satellite and (
+            self.pause_on_screen_off
+            or _env_float("SCREEN_TIMEOUT", 0) > 0
+        ):
+            logger.warning(
+                "VOICE_SATELLITE is enabled but the page freezes/stops when the screen blanks "
+                "(pause_on_screen_off and/or screen_timeout) - the microphone and wake-word "
+                "engine stop with it. Keep the screen always on (screen_timeout=0, "
+                "pause_on_screen_off=false) for hands-free voice."
+            )
 
         # --- Runtime state ---
         self.proc: asyncio.subprocess.Process | None = None
@@ -430,6 +463,14 @@ class ChromiumKiosk:
             # rasterization and WebGL all stay hardware-accelerated.
             "--disable-accelerated-2d-canvas",
         ]
+        if self.voice_satellite and urlsplit(self.ha_url_base).scheme == "http":
+            # Voice Satellite needs getUserMedia, which browsers only expose in secure contexts.
+            # On a plain-http HA instance that would silently kill the wake-word engine - the
+            # same problem the official Android Kiosk Satellite app solves with its loopback
+            # proxy. This is the Chromium-blessed equivalent for a kiosk: treat exactly this
+            # one origin as secure. Only ever our own single trusted HA origin, so the "unsafe"
+            # in the flag name buys no extra exposure beyond what the kiosk already is.
+            args.append(f"--unsafely-treat-insecure-origin-as-secure={self.ha_url_base}")
         if self.browser_language:
             # Selects which locale .pak file Chromium loads (its own UI strings, spellchecker,
             # etc). Also the initial signal Chromium uses to seed Accept-Language/navigator.language
@@ -823,6 +864,11 @@ class ChromiumKiosk:
             "features": [{"name": "prefers-color-scheme", "value": "dark" if self.dark_mode else "light"}]
         })
 
+        if self.voice_satellite:
+            # Pre-grant mic access before the first page even finishes loading so Voice
+            # Satellite's getUserMedia succeeds without a prompt or user gesture.
+            await self._grant_microphone_permission()
+
         if self.browser_language:
             # --lang (in _build_args) picks which locale Chromium's own UI/spellchecker uses, but
             # doesn't reliably reach page-visible signals in every Chromium build. Belt-and-suspenders
@@ -965,6 +1011,12 @@ class ChromiumKiosk:
             # skip applying sidebar/theme settings for the rest of the session.
             self._settings_applied = await self._apply_ha_settings()
 
+        if self.voice_satellite and under_ha and not is_auth_page:
+            # Runs on every dashboard load (initial boot, periodic refresh, websocket-recovery
+            # reload, post-DPMS reload) since Voice Satellite tears itself down on 'pagehide'
+            # and must come back up on each new page.
+            self._spawn(self._voice_satellite_autostart())
+
     async def _do_auto_login(self) -> None:
         if not self.ha_username or not self.ha_password:
             return
@@ -1028,6 +1080,105 @@ class ChromiumKiosk:
             }}
         """
         return await self._eval_js(js, "ha_settings")
+
+    # ------------------------------------------------------------------ #
+    # Voice Satellite auto-start
+    # ------------------------------------------------------------------ #
+    async def _grant_microphone_permission(self) -> None:
+        """Pre-grant microphone access for the HA origin via CDP's Browser.grantPermissions so
+        Voice Satellite's getUserMedia call succeeds immediately - no permission prompt and,
+        crucially, no user-gesture requirement (the profile dir is wiped on every launch, so a
+        persisted 'allow' from a previous session never survives). The Browser.* domain lives on
+        the browser-level CDP target only, hence the short-lived second connection - the same
+        pattern get_gpu_info uses."""
+        browser_conn: CDPConnection | None = None
+        try:
+            browser_conn = await CDPConnection.connect_browser(DEFAULT_CDP_HOST, DEFAULT_CDP_PORT)
+            await browser_conn.send("Browser.grantPermissions", {
+                "permissions": ["audioCapture"],
+                "origin": self.ha_url_base,
+            })
+            logger.info("Voice Satellite: granted microphone access for %s", self.ha_url_base)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(
+                "Voice Satellite: could not pre-grant microphone access (%s) - if the wake-word "
+                "engine then parks behind its floating start button, it will be tapped anyway; "
+                "if that also fails, tap the button manually once", e,
+            )
+        finally:
+            if browser_conn is not None:
+                with suppress(Exception):
+                    await browser_conn.close()
+
+    # Locates Voice Satellite's floating 'tap to start' overlay button (#voice-satellite-ui is
+    # the global engine UI injected on every page; see voice-satellite-card-integration's
+    # card/ui.js). Returns the viewport-space center of the button for Input.dispatchMouseEvent,
+    # or null when the button isn't showing (engine already running or not configured).
+    _VS_START_BUTTON_JS = """
+        (function() {
+            const btn = document.querySelector('#voice-satellite-ui .vs-start-btn');
+            if (!btn || !btn.classList.contains('visible')) return null;
+            const r = btn.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) return null;
+            return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});
+        })()
+    """
+
+    async def _eval_js_value(self, js: str) -> Any:
+        """Runtime.evaluate with returnByValue, returning the expression's JSON value or None.
+        Like _eval_js but for expressions whose result matters."""
+        if self.conn is None:
+            return None
+        try:
+            result = await self.conn.send("Runtime.evaluate", {"expression": js, "returnByValue": True})
+            if result.get("exceptionDetails"):
+                return None
+            return result.get("result", {}).get("value")
+        except Exception as e:  # pylint: disable=broad-except
+            logger.debug("[_eval_js_value] Failed to evaluate JS: %s", e)
+            return None
+
+    async def _voice_satellite_autostart(self) -> None:
+        """Watch for Voice Satellite's floating 'tap to start' button after each page load and
+        tap it via CDP input events.
+
+        With mic access pre-granted (_grant_microphone_permission) Voice Satellite's own
+        auto-start normally succeeds silently. This is the belt-and-suspenders path for when
+        the browser still parks the engine behind the floating button (e.g. an AudioContext
+        resume refused without user activation): a CDP-dispatched mouse press/release is a
+        *trusted* renderer input event, so it carries real user activation and unblocks
+        everything a human finger tap would - which plain element.click() JS would not.
+        """
+        deadline = time.monotonic() + VS_AUTOSTART_MAX_WAIT
+        taps = 0
+        while time.monotonic() < deadline and taps < VS_AUTOSTART_MAX_TAPS:
+            await asyncio.sleep(VS_AUTOSTART_POLL_INTERVAL)
+            if (self._stopping or self._page_frozen or self.conn is None
+                    or not self.conn.connected or self._restart_lock.locked()):
+                return
+            raw = await self._eval_js_value(self._VS_START_BUTTON_JS)
+            if not raw:
+                continue  # Button not showing - engine either running fine or not yet ready
+            try:
+                pos = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            taps += 1
+            logger.info("Voice Satellite: tapping floating start button (attempt %d/%d)",
+                        taps, VS_AUTOSTART_MAX_TAPS)
+            click = {"x": pos.get("x", 0), "y": pos.get("y", 0), "button": "left", "clickCount": 1}
+            try:
+                await self.conn.send("Input.dispatchMouseEvent", {"type": "mousePressed", **click})
+                await self.conn.send("Input.dispatchMouseEvent", {"type": "mouseReleased", **click})
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning("Voice Satellite: failed to tap start button: %s", e)
+                continue
+            # Give the engine a moment to spin up, then confirm the tap actually dismissed
+            # the button; otherwise keep polling until another attempt fits in the window.
+            await asyncio.sleep(VS_AUTOSTART_RECHECK_DELAY)
+            if not await self._eval_js_value(self._VS_START_BUTTON_JS):
+                logger.info("Voice Satellite: engine started hands-free")
+                return
 
     async def _eval_js(self, js: str, label: str) -> bool:
         if self.conn is None:

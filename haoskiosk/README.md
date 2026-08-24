@@ -70,6 +70,7 @@ Trouble installing, or with displays/touchscreens? See
 | `save_onscreen_config` | `true` | Persist onscreen-keyboard settings across sessions. |
 | `xorg_conf` / `xorg_append_replace` | — | Append to or replace the default `xorg.conf`. Leave blank + `Append` to restore default. |
 | `audio_sink` | `Auto` | `Auto` / `HDMI` / `USB` / `NONE`. |
+| `voice_satellite` | `false` | Hands-free auto-start of [Voice Satellite](https://github.com/jxlarrea/voice-satellite-card-integration) (HACS): pre-grants mic access over CDP, treats a plain-http HA URL as a secure origin, and taps Voice Satellite's floating start button automatically after every boot/reload — no manual tapping. See [Voice Satellite](#voice-satellite). |
 | `rest_ip` | `127.0.0.1` | REST server bind address. `0.0.0.0` accepts requests from anywhere — **only do this if you also set `rest_bearer_token`**, otherwise it's a real security hole. |
 | `rest_port` | `8080` | REST port, 1024–49151. |
 | `rest_bearer_token` | `""` | If set, REST calls need `-H "Authorization: Bearer <token>"`. |
@@ -312,6 +313,43 @@ Standard Chromium shortcuts work on the page (`Ctrl+R` reload,
 | `Ctrl+Alt+K` | Screenshot → `/media/screenshots` |
 | `Ctrl+Alt+Shift+Left` / `Alt+Shift+Tab` | Previous window |
 | `Ctrl+Alt+Shift+Right` / `Alt+Tab` | Next window |
+
+---
+
+## Voice Satellite
+
+[Voice Satellite](https://github.com/jxlarrea/voice-satellite-card-integration)
+(HACS) turns the kiosk into a real `assist_satellite`: wake word, conversations,
+timers and announcements, all in the browser. Without help, though, it parks
+behind a floating "tap to start" microphone button after every boot — browsers
+refuse microphone capture without a user gesture, and this add-on wipes its
+Chromium profile on each launch, so no remembered permission ever survives.
+
+With the `voice_satellite` option enabled, the add-on starts it hands-free:
+
+1. **Microphone pre-granted** — `Browser.grantPermissions` (`audioCapture`) is
+   sent over CDP right after launch, before the first page finishes loading.
+   No prompt, no gesture requirement.
+2. **Plain-http instances work** — if `ha_url` is not https, Chromium is
+   launched with `--unsafely-treat-insecure-origin-as-secure` for exactly that
+   origin so `getUserMedia` exists at all (the browser-side equivalent of
+   [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite)'s secure-
+   context proxy).
+3. **Auto-tap fallback** — after every page load (boot, periodic refresh,
+   websocket-recovery reload), the add-on watches for Voice Satellite's
+   floating start button and taps it via CDP input events — *trusted* browser
+   input, i.e. a real user activation, which plain JS `.click()` can't provide.
+
+One-time setup: install Voice Satellite via HACS, add the integration once per
+browser, open the **Voice Satellite** sidebar panel on the kiosk and pick this
+device's satellite entity. After that, voice comes up by itself on every boot.
+
+> **Screen-off tradeoff:** with `pause_on_screen_off` or a non-zero
+> `screen_timeout`, the page freezes when the screen blanks and the wake-word
+> engine stops with it. For always-listening voice keep the screen always on
+> (`screen_timeout: 0`, `pause_on_screen_off: false`); the add-on logs a
+> warning when the two are combined. The vsWakeWord engine additionally needs
+> WebGPU (hardware GL) — check `/kiosk_status`'s `gpu_info` if in doubt.
 
 ---
 

@@ -115,6 +115,20 @@ configuration:
       hdmi: "HDMI"
       usb: "USB"
       none: "None"
+  voice_satellite:
+    name: "Voice Satellite Auto-Start"
+    description: |
+      Automatically start the [Voice Satellite](https://github.com/jxlarrea/voice-satellite-card-integration)
+      voice assistant hands-free when the kiosk boots or reloads, instead of having to tap
+      its floating microphone button manually every time. The add-on pre-grants microphone
+      access to Home Assistant over CDP, treats a plain 'http://' HA URL as a secure origin
+      so the microphone works without HTTPS, and taps Voice Satellite's start button if the
+      browser ever parks it behind one.
+      [Default: False]
+      Note: Requires the Voice Satellite integration (via HACS) with a satellite entity
+      assigned to this browser in its sidebar panel. Also keep the screen always on
+      ('Screen Timeout' = 0 and 'Pause Rendering When Screen Off' = off) - the wake-word
+      engine stops whenever the page freezes/screen blanks.
   rest_ip:
     name: "REST IP address"
     description: |
