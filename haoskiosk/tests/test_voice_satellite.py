@@ -75,6 +75,29 @@ def test_grant_failure_is_swallowed():
 
 
 # --------------------------------------------------------------------------- #
+# _seed_profile_preferences - race-free prompt suppression via profile seed
+# --------------------------------------------------------------------------- #
+
+def test_seeds_password_off_and_mic_allow(tmp_path, monkeypatch):
+    monkeypatch.setattr(ck, "PROFILE_DIR", str(tmp_path))
+    _kiosk()._seed_profile_preferences()
+    data = json.loads((tmp_path / "Default" / "Preferences").read_text())
+    assert data["credentials_enable_service"] is False
+    assert data["credentials_enable_autosignin"] is False
+    assert data["profile"]["password_manager_enabled"] is False
+    mic = data["profile"]["content_settings"]["exceptions"]["media_mic"]
+    assert mic["http://localhost:8123,*"]["setting"] == 1  # CONTENT_SETTING_ALLOW
+
+
+def test_seeds_no_mic_exception_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(ck, "PROFILE_DIR", str(tmp_path))
+    _kiosk(voice_satellite=False)._seed_profile_preferences()
+    data = json.loads((tmp_path / "Default" / "Preferences").read_text())
+    assert data["profile"]["password_manager_enabled"] is False  # Password off always
+    assert "content_settings" not in data["profile"]
+
+
+# --------------------------------------------------------------------------- #
 # _voice_satellite_autostart - the floating-start-button watcher/tapper
 # --------------------------------------------------------------------------- #
 

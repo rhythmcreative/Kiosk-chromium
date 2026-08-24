@@ -329,7 +329,11 @@ With the `voice_satellite` option enabled, the add-on starts it hands-free:
 
 1. **Microphone pre-granted** — `Browser.grantPermissions` (`audioCapture`) is
    sent over CDP right after launch, before the first page finishes loading.
-   No prompt, no gesture requirement.
+   No prompt, no gesture requirement. The fresh Chromium profile is also
+   seeded with a mic-allow exception for your HA origin before launch, so
+   there's never a prompt even on a fast first load — and the password
+   manager is disabled entirely, so the "Save password?" bubble after
+   auto-login is gone too.
 2. **Plain-http instances work** — if `ha_url` is not https, Chromium is
    launched with `--unsafely-treat-insecure-origin-as-secure` for exactly that
    origin so `getUserMedia` exists at all (the browser-side equivalent of

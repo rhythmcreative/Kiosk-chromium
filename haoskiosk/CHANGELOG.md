@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.28 - August 2026
+
+- **Fix: no more 'Save password?' bubble after auto-login, and no microphone permission prompt
+  even on a fast first page load.** Both prompts are things a headless kiosk can never answer,
+  and both are now silenced by seeding Chromium's `Default/Preferences` into the fresh profile
+  before every launch (the profile is wiped each time, so the seed is deterministic):
+    - password manager fully off (`credentials_enable_service`, `credentials_enable_autosignin`,
+      `profile.password_manager_enabled`) - kills the save-password bubble that the HA
+      auto-login's form fill used to trigger;
+    - with `voice_satellite` on, a mic content-setting exception (`media_mic` → ALLOW) for
+      exactly the HA origin - read by Chromium before any page exists, so it wins the race
+      that CDP `Browser.grantPermissions` could occasionally lose against Voice Satellite's
+      own getUserMedia call (the grant stays as belt-and-suspenders).
+
 ## v1.4.27 - August 2026
 
 - **New: `voice_satellite` (default `false`) - hands-free auto-start of

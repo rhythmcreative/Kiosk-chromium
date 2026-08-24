@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: chromium_kiosk.py
-# Version: 1.4.27
+# Version: 1.4.28
 # Copyright Jeff Kosowsky
 # Date: August 2026
 
@@ -53,7 +53,7 @@ from cdp_client import CDPConnection, DEFAULT_CDP_HOST, DEFAULT_CDP_PORT
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.4.27"
+__version__ = "1.4.28"
 
 CHROMIUM_BIN = "chromium"  # Resolved via PATH
 PROFILE_DIR = "/root/.config/chromium-kiosk"
@@ -534,6 +534,7 @@ class ChromiumKiosk:
         for gl_mode in gl_modes:
             shutil.rmtree(PROFILE_DIR, ignore_errors=True)  # Always start from a fresh profile (no session restore)
             os.makedirs(PROFILE_DIR, exist_ok=True)
+            self._seed_profile_preferences()
 
             args = self._build_args(gl_mode)
             logger.info("Launching Chromium (%s GL): %s %s", gl_mode, CHROMIUM_BIN, " ".join(args))
@@ -1084,6 +1085,48 @@ class ChromiumKiosk:
     # ------------------------------------------------------------------ #
     # Voice Satellite auto-start
     # ------------------------------------------------------------------ #
+    def _seed_profile_preferences(self) -> None:
+        """Seed the freshly-wiped profile with Chromium Preferences that silence UI prompts a
+        headless kiosk can never answer:
+
+          - Password manager fully off ('Save password?' bubble after the HA auto-login fills
+            the login form - pre-existing annoyance, now gone).
+          - With voice_satellite: microphone content-setting exception set to ALLOW for exactly
+            the HA origin. This is the race-free complement to _grant_microphone_permission:
+            that one runs over CDP after launch and can lose the race against Voice Satellite's
+            own getUserMedia on a fast first page load, while this file is read by Chromium
+            before any page exists, so there is never a prompt in the first place.
+
+        Written before every launch (the profile is wiped each time), into the 'Default'
+        profile dir Chromium will create anyway."""
+        prefs: dict[str, Any] = {
+            "credentials_enable_service": False,
+            "credentials_enable_autosignin": False,
+            "profile": {
+                "password_manager_enabled": False,
+            },
+        }
+        if self.voice_satellite:
+            prefs["profile"]["content_settings"] = {
+                "exceptions": {
+                    # '<origin>,*' = primary-pattern + embedded wildcard, setting 1 = ALLOW
+                    # (Chromium's CONTENT_SETTING_ALLOW). Same value CDP's grantPermissions sets.
+                    "media_mic": {
+                        f"{self.ha_url_base},*": {"setting": 1},
+                    },
+                }
+            }
+        prefs_path = os.path.join(PROFILE_DIR, "Default")
+        try:
+            os.makedirs(prefs_path, exist_ok=True)
+            with open(os.path.join(prefs_path, "Preferences"), "w", encoding="utf-8") as f:
+                json.dump(prefs, f)
+            logger.debug("Seeded Chromium profile preferences (%s)", ", ".join(sorted(
+                ("mic-allow" if self.voice_satellite else "", "no-password-manager"))))
+        except OSError as e:
+            logger.warning("Could not seed Chromium profile preferences (%s) - password/mic "
+                           "prompts may appear", e)
+
     async def _grant_microphone_permission(self) -> None:
         """Pre-grant microphone access for the HA origin via CDP's Browser.grantPermissions so
         Voice Satellite's getUserMedia call succeeds immediately - no permission prompt and,
