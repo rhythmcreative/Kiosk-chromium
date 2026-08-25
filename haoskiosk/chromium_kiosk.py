@@ -971,21 +971,29 @@ class ChromiumKiosk:
 
     def _vs_entity_seed_js(self) -> str:
         """Seed Voice Satellite's stored satellite-entity pick (localStorage 'vs-satellite-entity',
-        see voice-satellite-card-integration's shared/entity-picker.js) before any page script
-        runs. Injected via Page.addScriptToEvaluateOnNewDocument, so the card resolves its entity
-        on the very first paint instead of showing its picker - which matters because the profile
-        (and thus localStorage) is wiped on every launch.
+        see voice-satellite-card-integration's shared/entity-picker.js) so the card resolves its
+        entity instead of showing its picker - which matters because the profile (and thus
+        localStorage) is wiped on every launch.
+
+        Used in two contexts: injected via Page.addScriptToEvaluateOnNewDocument (return value
+        irrelevant there), and evaluated directly by _voice_satellite_autostart as a post-load
+        catch-up for the very first document, which can finish loading before our CDP session
+        registers the injection - the engine's own 1s hass observer picks up a late seed without
+        needing a reload.
 
         Set-if-absent rather than overwrite: within a live session, if the card itself cleared
         the key (resolveEntity removes stale ids that no longer exist in HA) we don't resurrect
-        it on the next reload; across launches the fresh profile guarantees absence anyway."""
+        it on the next reload; across launches the fresh profile guarantees absence anyway.
+        Returns true when the key was actually set, false when already present."""
         entity = json.dumps(self.voice_satellite_entity)
         return f"""
             (function() {{
                 try {{
                     if (!localStorage.getItem('vs-satellite-entity')) {{
                         localStorage.setItem('vs-satellite-entity', {entity});
+                        return true;
                     }}
+                    return false;
                 }} catch (e) {{ console.warn('Voice Satellite entity seed failed:', e); }}
             }})();
         """
@@ -1238,6 +1246,9 @@ class ChromiumKiosk:
             logger.debug("[_eval_js_value] Failed to evaluate JS: %s", e)
             return None
 
+    # Current stored entity pick, for the autostart loop's seed/reject diagnostics.
+    _VS_STORED_ENTITY_JS = "localStorage.getItem('vs-satellite-entity')"
+
     async def _voice_satellite_autostart(self) -> None:
         """Watch for Voice Satellite's floating 'tap to start' button after each page load and
         tap it via CDP input events.
@@ -1251,11 +1262,25 @@ class ChromiumKiosk:
         """
         deadline = time.monotonic() + VS_AUTOSTART_MAX_WAIT
         taps = 0
+        entity_seeded = False
         while time.monotonic() < deadline and taps < VS_AUTOSTART_MAX_TAPS:
             await asyncio.sleep(VS_AUTOSTART_POLL_INTERVAL)
             if (self._stopping or self._page_frozen or self.conn is None
                     or not self.conn.connected or self._restart_lock.locked()):
                 return
+            # Post-load catch-up for the configured entity: the very first document usually
+            # finishes loading before _connect_cdp registers the on-new-document injection,
+            # and HA being an SPA means no new document (hence no injection) until the next
+            # periodic refresh. Seeding here closes that gap - Voice Satellite's own engine
+            # re-checks localStorage every second and starts bound without a reload.
+            if self.voice_satellite_entity and not entity_seeded:
+                stored = await self._eval_js_value(self._VS_STORED_ENTITY_JS)
+                if stored != self.voice_satellite_entity:
+                    await self._eval_js_value(self._vs_entity_seed_js())
+                    logger.info("Voice Satellite: pre-selected '%s' after page load "
+                                "(first document beat script registration)",
+                                self.voice_satellite_entity)
+                entity_seeded = True
             raw = await self._eval_js_value(self._VS_START_BUTTON_JS)
             if not raw:
                 continue  # Button not showing - engine either running fine or not yet ready
@@ -1279,6 +1304,19 @@ class ChromiumKiosk:
             if not await self._eval_js_value(self._VS_START_BUTTON_JS):
                 logger.info("Voice Satellite: engine started hands-free")
                 return
+
+        # Window exhausted with the button still showing (or never seen): if the configured
+        # entity is no longer in localStorage, Voice Satellite's resolveEntity() cleared it as
+        # stale - i.e. no such assist_satellite.<id> exists in HA. That's a configuration typo,
+        # not a kiosk bug, and no amount of retrying will bind it.
+        if self.voice_satellite_entity:
+            stored = await self._eval_js_value(self._VS_STORED_ENTITY_JS)
+            if stored != self.voice_satellite_entity:
+                logger.warning(
+                    "Voice Satellite: configured entity '%s' was cleared/rejected by the card "
+                    "- check that it exactly matches an existing entity id (HA → Developer "
+                    "Tools → States, filter 'assist_satellite')", self.voice_satellite_entity,
+                )
 
     async def _eval_js(self, js: str, label: str) -> bool:
         if self.conn is None:

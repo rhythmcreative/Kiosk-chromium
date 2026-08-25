@@ -18,6 +18,7 @@ def _kiosk(**attrs):
     kiosk.browser_language = ""
     kiosk.onscreen_keyboard = False
     kiosk.voice_satellite = True
+    kiosk.voice_satellite_entity = ""
     kiosk.ha_url_base = "http://localhost:8123"
     kiosk._current_url = "http://localhost:8123/"
     for name, value in attrs.items():
@@ -105,10 +106,10 @@ def test_seeds_no_mic_exception_when_disabled(tmp_path, monkeypatch):
 _BUTTON_POS = json.dumps({"x": 640.0, "y": 700.0})
 
 
-def _autostart_kiosk(eval_values):
+def _autostart_kiosk(eval_values, **attrs):
     """A kiosk whose conn is an AsyncMock and whose Runtime.evaluate results are scripted:
     each _eval_js_value call consumes the next entry of eval_values ('sentinel' after end)."""
-    kiosk = _kiosk()
+    kiosk = _kiosk(**attrs)
     kiosk.conn = AsyncMock()
     kiosk._stopping = False
     kiosk._page_frozen = False
@@ -172,6 +173,36 @@ def test_click_cdp_error_keeps_polling(monkeypatch):
 
     kiosk.conn.send = failing_first_send
     asyncio.run(kiosk._voice_satellite_autostart())  # Must not raise; retries until button gone
+
+
+def test_autostart_late_seeds_configured_entity(caplog):
+    # First document loaded before injection registration: stored pick missing -> seed runs
+    # post-load, then the normal button flow proceeds (tap once, button gone, done).
+    import pytest
+
+    kiosk = _autostart_kiosk(
+        [None, True, _BUTTON_POS, None],  # stored=None -> seed -> button visible -> gone
+        voice_satellite_entity="assist_satellite.sat_office",
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        _fast_autostart_timing(mp)
+        with caplog.at_level("INFO"):
+            asyncio.run(kiosk._voice_satellite_autostart())
+    assert any("pre-selected" in r.message for r in caplog.records)
+
+
+def test_autostart_warns_when_card_rejects_entity(caplog):
+    # Entity seeded but resolveEntity() keeps clearing it (no such assist_satellite in HA):
+    # button persists through every tap, final check sees the key cleared -> loud warning.
+    import pytest
+
+    seq = [None, True] + [_BUTTON_POS] * (2 * ck.VS_AUTOSTART_MAX_TAPS) + [None]
+    kiosk = _autostart_kiosk(seq, voice_satellite_entity="assist_satellite.sat_office")
+    with pytest.MonkeyPatch.context() as mp:
+        _fast_autostart_timing(mp)
+        with caplog.at_level("WARNING"):
+            asyncio.run(kiosk._voice_satellite_autostart())
+    assert any("cleared/rejected" in r.message for r in caplog.records)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.31 - August 2026
+
+- **Fix: `voice_satellite_entity` now binds on first load.** The very first document usually
+  finished loading *before* the kiosk's CDP session registered its before-page-scripts
+  injection - and since HA is an SPA (no new document until the periodic refresh), the seed
+  only landed up to 10 minutes later. The auto-start loop now seeds the configured entity
+  right after each page load as a catch-up; Voice Satellite's own engine re-checks localStorage
+  every second, so it binds within seconds of boot with no reload.
+- New diagnostic: if the card keeps clearing the configured entity, the log says so explicitly -
+  that means the id doesn't match an existing assist_satellite entity in HA (typo), not a kiosk bug.
+
 ## v1.4.30 - August 2026
 
 - **New: `voice_satellite_entity` option** - pre-select the assist-satellite entity the Voice
