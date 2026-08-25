@@ -226,6 +226,81 @@ def test_entity_seed_js_sets_local_storage_key():
     assert "getItem" in js and "setItem" in js  # Set-if-absent semantics
 
 
+# --------------------------------------------------------------------------- #
+# _resolve_voice_satellite_entity - friendly names / 'auto' -> concrete id
+# --------------------------------------------------------------------------- #
+
+_STATES = [
+    {"entity_id": "assist_satellite.kitchen", "attributes": {"friendly_name": "Kitchen"}},
+    {"entity_id": "assist_satellite.abc123", "attributes": {"friendly_name": "Home Assistant"}},
+    {"entity_id": "media_player.office", "attributes": {"friendly_name": "Office"}},
+    {"entity_id": "assist_satellite.zzz", "attributes": {}},
+]
+
+
+def test_pick_assist_entity_auto_first_sorted():
+    assert ck.ChromiumKiosk._pick_assist_entity(_STATES, "auto") == "assist_satellite.abc123"
+
+
+def test_pick_assist_entity_by_friendly_name_case_insensitive():
+    pick = ck.ChromiumKiosk._pick_assist_entity(_STATES, "home assistant")
+    assert pick == "assist_satellite.abc123"
+
+
+def test_pick_assist_entity_by_entity_id():
+    assert ck.ChromiumKiosk._pick_assist_entity(_STATES, "ASSIST_SATELLITE.KITCHEN") == "assist_satellite.kitchen"
+
+
+def test_pick_assist_entity_none_on_missing_or_ambiguous():
+    assert ck.ChromiumKiosk._pick_assist_entity(_STATES, "No existe") is None
+    ambiguous = _STATES + [{"entity_id": "assist_satellite.dup", "attributes": {"friendly_name": "Kitchen"}}]
+    assert ck.ChromiumKiosk._pick_assist_entity(ambiguous, "kitchen") is None
+    assert ck.ChromiumKiosk._pick_assist_entity([], "auto") is None
+
+
+def test_resolve_keeps_well_formed_id_without_api(monkeypatch):
+    async def fail_fetch():  # Must never be called for a full entity id
+        raise AssertionError("API fetch not needed for a well-formed id")
+
+    kiosk = _kiosk(voice_satellite_entity="assist_satellite.sat_office")
+    monkeypatch.setattr(kiosk, "_fetch_ha_states", fail_fetch)
+    asyncio.run(kiosk._resolve_voice_satellite_entity())
+    assert kiosk.voice_satellite_entity == "assist_satellite.sat_office"
+
+
+def test_resolve_friendly_name_via_ha_states(monkeypatch):
+    async def fake_fetch():
+        return _STATES
+
+    kiosk = _kiosk(voice_satellite_entity="Home Assistant")
+    monkeypatch.setattr(kiosk, "_fetch_ha_states", fake_fetch)
+    asyncio.run(kiosk._resolve_voice_satellite_entity())
+    assert kiosk.voice_satellite_entity == "assist_satellite.abc123"
+
+
+def test_resolve_unmatched_name_clears_to_manual(monkeypatch, caplog):
+    async def fake_fetch():
+        return _STATES
+
+    kiosk = _kiosk(voice_satellite_entity="No existe")
+    monkeypatch.setattr(kiosk, "_fetch_ha_states", fake_fetch)
+    with caplog.at_level("WARNING"):
+        asyncio.run(kiosk._resolve_voice_satellite_entity())
+    assert kiosk.voice_satellite_entity == ""  # Falls back to manual picker
+    assert any("no unique assist_satellite" in r.message for r in caplog.records)
+
+
+def test_resolve_api_failure_clears_to_manual():
+    kiosk = _kiosk(voice_satellite_entity="Home Assistant")
+
+    async def none_fetch():
+        return None
+
+    kiosk._fetch_ha_states = none_fetch
+    asyncio.run(kiosk._resolve_voice_satellite_entity())  # Must not raise
+    assert kiosk.voice_satellite_entity == ""
+
+
 def test_connect_cdp_registers_entity_seed_when_configured(monkeypatch):
     kiosk = _kiosk(dark_mode=True, voice_satellite_entity="assist_satellite.sat_office")
     kiosk.conn = AsyncMock()

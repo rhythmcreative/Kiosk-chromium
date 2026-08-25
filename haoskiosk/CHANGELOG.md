@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.32 - August 2026
+
+- **Improvement: `voice_satellite_entity` accepts what HA's own pickers show.** Instead of
+  requiring the raw entity id, it now also accepts:
+    - the exact friendly name (e.g. 'Home Assistant'), resolved case-insensitively against
+      HA's state machine at startup via the Supervisor-proxied core API;
+    - 'auto' = first assist satellite found.
+  Full entity ids keep working as before; ambiguous or unmatched names log a warning and fall
+  back to manual selection.
+
 ## v1.4.31 - August 2026
 
 - **Fix: `voice_satellite_entity` now binds on first load.** The very first document usually

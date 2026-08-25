@@ -192,13 +192,11 @@ class ChromiumKiosk:
         # Accept only well-formed ids; anything else would be silently cleared by the
         # card's own resolveEntity() anyway, so warn instead of pretending it worked.
         self.voice_satellite_entity = (os.getenv("VOICE_SATELLITE_ENTITY") or "").strip()
-        if self.voice_satellite_entity and not self._is_assist_satellite_id(self.voice_satellite_entity):
-            logger.warning(
-                "VOICE_SATELLITE_ENTITY=%r does not look like an assist_satellite entity id "
-                "(expected e.g. 'assist_satellite.satellite_office') - ignoring it",
-                self.voice_satellite_entity,
-            )
-            self.voice_satellite_entity = ""
+        # Accepted as-is if already a well-formed 'assist_satellite.<id>'; otherwise resolved
+        # against HA's state machine at start() (_resolve_voice_satellite_entity): an exact
+        # friendly name - the same label HA's own pickers show, e.g. "Home Assistant" - or
+        # 'auto' for the first satellite found. Resolution needs the network/Supervisor token,
+        # so it can't happen here in __init__.
 
         logger.info(
             "ChromiumKiosk config: URL=%s DARK_MODE=%s SIDEBAR=%s THEME=%s LANGUAGE=%s LOGIN_DELAY=%.1f "
@@ -255,6 +253,10 @@ class ChromiumKiosk:
     # ------------------------------------------------------------------ #
     async def start(self) -> None:
         """Launch Chromium and establish the CDP control session."""
+        if self.voice_satellite and self.voice_satellite_entity:
+            # Resolve friendly names/'auto' to a concrete entity id BEFORE the CDP scripts
+            # register, so the seed injects the final value on the first document.
+            await self._resolve_voice_satellite_entity()
         await self._launch_process()
         await self._connect_cdp()
         self._watchdog_task = asyncio.create_task(self._watch_process_exit(self.proc))
@@ -968,6 +970,70 @@ class ChromiumKiosk:
     def _is_assist_satellite_id(value: str) -> bool:
         """True for a well-formed assist-satellite entity id ('assist_satellite.<object_id>')."""
         return value.startswith("assist_satellite.") and "." not in value[len("assist_satellite."):]
+
+    async def _fetch_ha_states(self) -> list[dict[str, Any]] | None:
+        """Fetch all entity states through the Supervisor-proxied core API (the SUPERVISOR_TOKEN
+        env var is injected into every add-on container; config.yaml sets homeassistant_api).
+        Returns None on any failure - callers fall back to manual selection."""
+        token = os.getenv("SUPERVISOR_TOKEN", "")
+        if not token:
+            logger.warning("Voice Satellite: SUPERVISOR_TOKEN missing - cannot resolve '%s'",
+                           self.voice_satellite_entity)
+            return None
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+                async with session.get(
+                    "http://supervisor/core/api/states",
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning("Voice Satellite: HA states fetch failed (HTTP %d)", resp.status)
+                        return None
+                    return await resp.json()
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning("Voice Satellite: could not reach the HA API (%s)", e)
+            return None
+
+    @staticmethod
+    def _pick_assist_entity(states: list[dict[str, Any]], query: str) -> str | None:
+        """Choose the assist_satellite entity_id matching 'query' - either 'auto' (first
+        satellite, sorted by id), an exact case-insensitive entity id, or an exact
+        case-insensitive friendly name as shown in HA's own pickers. Returns None when
+        nothing matches or the name is ambiguous (several satellites share it)."""
+        entries: dict[str, str] = {}
+        for st in states or []:
+            eid = st.get("entity_id", "")
+            if not eid.startswith("assist_satellite."):
+                continue
+            entries[eid] = str((st.get("attributes") or {}).get("friendly_name") or "")
+        if not entries:
+            return None
+        q = query.strip().casefold()
+        if q == "auto":
+            return sorted(entries)[0]
+        exact = sorted(eid for eid, name in entries.items()
+                       if name.casefold() == q or eid.casefold() == q)
+        return exact[0] if len(exact) == 1 else None
+
+    async def _resolve_voice_satellite_entity(self) -> None:
+        """Turn the configured voice_satellite_entity into a concrete entity id before the
+        seed scripts register. Full ids pass through untouched; anything else (a friendly
+        name like 'Home Assistant', or 'auto') is resolved against HA's state machine.
+        Unresolvable values are dropped with a warning - manual picker fallback."""
+        raw = self.voice_satellite_entity
+        if not raw or self._is_assist_satellite_id(raw):
+            return
+        picked = self._pick_assist_entity(await self._fetch_ha_states() or [], raw)
+        if picked:
+            logger.info("Voice Satellite: resolved '%s' -> %s", raw, picked)
+            self.voice_satellite_entity = picked
+        else:
+            logger.warning(
+                "VOICE_SATELLITE_ENTITY=%r is not an entity id and no unique assist_satellite "
+                "matched that friendly name (use 'auto' for first-available) - ignoring it; "
+                "the panel stays in manual selection", raw,
+            )
+            self.voice_satellite_entity = ""
 
     def _vs_entity_seed_js(self) -> str:
         """Seed Voice Satellite's stored satellite-entity pick (localStorage 'vs-satellite-entity',
