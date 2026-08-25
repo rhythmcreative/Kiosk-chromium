@@ -1111,10 +1111,16 @@ class ChromiumKiosk:
                 "exceptions": {
                     # '<origin>,*' = primary-pattern + embedded wildcard, setting 1 = ALLOW
                     # (Chromium's CONTENT_SETTING_ALLOW). Same value CDP's grantPermissions sets.
-                    "media_mic": {
+                    # Key MUST be Chromium's own pref name for the mic content-setting type:
+                    # the registry name is 'media-stream-mic', but WebsiteSettingsInfo builds the
+                    # Preferences key via GetPreferenceName(), which replaces '-' with '_' ->
+                    # 'media_stream_mic'. Any other spelling (e.g. 'media_mic') is silently
+                    # ignored on read and dropped on the next Preferences flush, which re-opens
+                    # the mic prompt race this seed exists to close.
+                    "media_stream_mic": {
                         f"{self.ha_url_base},*": {"setting": 1},
                     },
-                }
+                },
             }
         prefs_path = os.path.join(PROFILE_DIR, "Default")
         try:

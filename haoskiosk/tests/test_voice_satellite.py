@@ -85,7 +85,7 @@ def test_seeds_password_off_and_mic_allow(tmp_path, monkeypatch):
     assert data["credentials_enable_service"] is False
     assert data["credentials_enable_autosignin"] is False
     assert data["profile"]["password_manager_enabled"] is False
-    mic = data["profile"]["content_settings"]["exceptions"]["media_mic"]
+    mic = data["profile"]["content_settings"]["exceptions"]["media_stream_mic"]
     assert mic["http://localhost:8123,*"]["setting"] == 1  # CONTENT_SETTING_ALLOW
 
 

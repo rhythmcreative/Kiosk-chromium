@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.29 - August 2026
+
+- **Fix: add-on failed to start at all (`SyntaxError: unmatched '}'`).** A stray closing brace
+  left over from v1.4.28's `media_mic` → `media_stream_mic` rename broke `chromium_kiosk.py`
+  compilation, crashing the container on every launch (voice satellite auto-start included).
+- The mic preference key itself stays `media_stream_mic` (Chromium's own Preferences spelling,
+  via GetPreferenceName()); test updated to match.
+
 ## v1.4.28 - August 2026
 
 - **Fix: no more 'Save password?' bubble after auto-login, and no microphone permission prompt
