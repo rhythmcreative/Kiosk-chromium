@@ -129,6 +129,15 @@ configuration:
       assigned to this browser in its sidebar panel. Also keep the screen always on
       ('Screen Timeout' = 0 and 'Pause Rendering When Screen Off' = off) - the wake-word
       engine stops whenever the page freezes/screen blanks.
+  voice_satellite_entity:
+    name: "Voice Satellite Entity"
+    description: |
+      Assist-satellite entity (e.g. 'assist_satellite.satellite_office') that the Voice
+      Satellite panel should bind to, pre-selected automatically at every start. Without
+      this, Voice Satellite forgets its pick on each restart (the browser profile is wiped)
+      and someone has to open its panel and choose the satellite again by hand.
+      Leave empty to keep manual selection.
+      [Default: ""]
   rest_ip:
     name: "REST IP address"
     description: |

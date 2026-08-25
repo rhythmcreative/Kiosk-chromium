@@ -183,13 +183,31 @@ class ChromiumKiosk:
         # official Android Kiosk Satellite app does natively, within browser limits).
         self.voice_satellite = _env_bool("VOICE_SATELLITE", False)
 
+        # Which assist-satellite entity the Voice Satellite card should bind to. Voice
+        # Satellite persists its entity pick in localStorage ('vs-satellite-entity'), but
+        # this add-on wipes the whole Chromium profile on every launch - so without help
+        # the picker comes back empty after each restart and someone has to tap through
+        # the panel again. When set, we seed that localStorage key via a script injected
+        # before any page runs (_vs_entity_seed_js), so the card comes up already bound.
+        # Accept only well-formed ids; anything else would be silently cleared by the
+        # card's own resolveEntity() anyway, so warn instead of pretending it worked.
+        self.voice_satellite_entity = (os.getenv("VOICE_SATELLITE_ENTITY") or "").strip()
+        if self.voice_satellite_entity and not self._is_assist_satellite_id(self.voice_satellite_entity):
+            logger.warning(
+                "VOICE_SATELLITE_ENTITY=%r does not look like an assist_satellite entity id "
+                "(expected e.g. 'assist_satellite.satellite_office') - ignoring it",
+                self.voice_satellite_entity,
+            )
+            self.voice_satellite_entity = ""
+
         logger.info(
             "ChromiumKiosk config: URL=%s DARK_MODE=%s SIDEBAR=%s THEME=%s LANGUAGE=%s LOGIN_DELAY=%.1f "
-            "ZOOM_LEVEL=%d BROWSER_REFRESH=%d ONSCREEN_KEYBOARD=%s VOICE_SATELLITE=%s",
+            "ZOOM_LEVEL=%d BROWSER_REFRESH=%d ONSCREEN_KEYBOARD=%s VOICE_SATELLITE=%s VS_ENTITY=%s",
             self.initial_url, self.dark_mode, raw_sidebar, theme or "(none)",
             self.browser_language or "(default)",
             self.login_delay, self.zoom_level, self.browser_refresh, self.onscreen_keyboard,
             self.voice_satellite,
+            self.voice_satellite_entity or "(unconfigured)",
         )
         if self.voice_satellite and (
             self.pause_on_screen_off
@@ -896,6 +914,13 @@ class ChromiumKiosk:
         scripts = [self._suppress_errors_js(), self._ws_recovery_js()]
         if self.browser_language:
             scripts.append(self._locale_spoof_js())
+        if self.voice_satellite and self.voice_satellite_entity:
+            # Seed Voice Satellite's stored entity pick before the card's own code reads it,
+            # so the panel comes up already bound to the configured assist satellite instead
+            # of showing its picker after every profile wipe (i.e. every launch).
+            scripts.append(self._vs_entity_seed_js())
+            logger.info("Voice Satellite: pre-selecting '%s' as the satellite entity",
+                        self.voice_satellite_entity)
         for script in scripts:
             await self.conn.send("Page.addScriptToEvaluateOnNewDocument", {"source": script})
 
@@ -936,6 +961,32 @@ class ChromiumKiosk:
                         get: function() {{ return Object.freeze({json.dumps(langs)}); }}, configurable: true
                     }});
                 }} catch (e) {{ console.warn('Failed to override navigator.language:', e); }}
+            }})();
+        """
+
+    @staticmethod
+    def _is_assist_satellite_id(value: str) -> bool:
+        """True for a well-formed assist-satellite entity id ('assist_satellite.<object_id>')."""
+        return value.startswith("assist_satellite.") and "." not in value[len("assist_satellite."):]
+
+    def _vs_entity_seed_js(self) -> str:
+        """Seed Voice Satellite's stored satellite-entity pick (localStorage 'vs-satellite-entity',
+        see voice-satellite-card-integration's shared/entity-picker.js) before any page script
+        runs. Injected via Page.addScriptToEvaluateOnNewDocument, so the card resolves its entity
+        on the very first paint instead of showing its picker - which matters because the profile
+        (and thus localStorage) is wiped on every launch.
+
+        Set-if-absent rather than overwrite: within a live session, if the card itself cleared
+        the key (resolveEntity removes stale ids that no longer exist in HA) we don't resurrect
+        it on the next reload; across launches the fresh profile guarantees absence anyway."""
+        entity = json.dumps(self.voice_satellite_entity)
+        return f"""
+            (function() {{
+                try {{
+                    if (!localStorage.getItem('vs-satellite-entity')) {{
+                        localStorage.setItem('vs-satellite-entity', {entity});
+                    }}
+                }} catch (e) {{ console.warn('Voice Satellite entity seed failed:', e); }}
             }})();
         """
 

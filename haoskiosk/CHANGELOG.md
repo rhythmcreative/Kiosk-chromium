@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.30 - August 2026
+
+- **New: `voice_satellite_entity` option** - pre-select the assist-satellite entity the Voice
+  Satellite panel binds to (e.g. 'assist_satellite.sat_office'), seeded into the page before
+  any of its scripts run on every load. Without it, each restart wipes the browser profile
+  (and with it the card's localStorage pick), so someone had to open the panel and re-select
+  the satellite by hand after every boot.
+- Malformed ids are rejected at startup with a log warning instead of being silently cleared
+  by the card later.
+
 ## v1.4.29 - August 2026
 
 - **Fix: add-on failed to start at all (`SyntaxError: unmatched '}'`).** A stray closing brace

@@ -151,6 +151,7 @@ load_config_var XORG_CONF ""
 load_config_var XORG_APPEND_REPLACE append
 load_config_var AUDIO_SINK auto
 load_config_var VOICE_SATELLITE false  # Auto-start the Voice Satellite assistant - see chromium_kiosk.py
+load_config_var VOICE_SATELLITE_ENTITY ""  # Assist-satellite entity to pre-select in the Voice Satellite panel
 load_config_var REST_PORT 8080
 load_config_var REST_IP "127.0.0.1"
 load_config_var REST_BEARER_TOKEN "" 1  # Mask token in log

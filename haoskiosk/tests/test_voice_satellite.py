@@ -3,6 +3,7 @@
 - _grant_microphone_permission: CDP Browser.grantPermissions(audioCapture) for the HA origin
 - _voice_satellite_autostart: taps the floating start button via trusted input events, stops
   when it disappears, caps attempts
+- voice_satellite_entity: env parsing/validation + _vs_entity_seed_js localStorage seeding
 """
 import asyncio
 import json
@@ -171,3 +172,53 @@ def test_click_cdp_error_keeps_polling(monkeypatch):
 
     kiosk.conn.send = failing_first_send
     asyncio.run(kiosk._voice_satellite_autostart())  # Must not raise; retries until button gone
+
+
+# --------------------------------------------------------------------------- #
+# voice_satellite_entity - pre-selecting the assist satellite in the panel
+# --------------------------------------------------------------------------- #
+
+def test_entity_id_validation():
+    assert ck.ChromiumKiosk._is_assist_satellite_id("assist_satellite.sat_office")
+    assert ck.ChromiumKiosk._is_assist_satellite_id("assist_satellite.01JABCDEFGH")
+    # Malformed ids would be silently cleared by the card's own resolveEntity() - reject up front
+    assert not ck.ChromiumKiosk._is_assist_satellite_id("")
+    assert not ck.ChromiumKiosk._is_assist_satellite_id("not-an-entity")
+    assert not ck.ChromiumKiosk._is_assist_satellite_id("media_player.office")
+    assert not ck.ChromiumKiosk._is_assist_satellite_id("assist_satellite.foo.bar")
+
+
+def test_entity_seed_js_sets_local_storage_key():
+    js = _kiosk(voice_satellite_entity="assist_satellite.sat_office")._vs_entity_seed_js()
+    assert "vs-satellite-entity" in js
+    assert '"assist_satellite.sat_office"' in js  # JSON-quoted entity id embedded
+    assert "getItem" in js and "setItem" in js  # Set-if-absent semantics
+
+
+def test_connect_cdp_registers_entity_seed_when_configured(monkeypatch):
+    kiosk = _kiosk(dark_mode=True, voice_satellite_entity="assist_satellite.sat_office")
+    kiosk.conn = AsyncMock()
+    monkeypatch.setattr(ck.CDPConnection, "connect", AsyncMock(return_value=kiosk.conn))
+    monkeypatch.setattr(ck.CDPConnection, "connect_browser", AsyncMock())
+    monkeypatch.setattr(ck.ChromiumKiosk, "get_gpu_info", AsyncMock(return_value=None))
+
+    asyncio.run(kiosk._connect_cdp())
+
+    sources = [c.args[1]["source"] for c in kiosk.conn.send.await_args_list
+               if c.args[0] == "Page.addScriptToEvaluateOnNewDocument"]
+    assert any("vs-satellite-entity" in s for s in sources)
+
+
+def test_connect_cdp_skips_entity_seed_when_unconfigured(monkeypatch):
+    kiosk = _kiosk(dark_mode=True)
+    kiosk.voice_satellite_entity = ""
+    kiosk.conn = AsyncMock()
+    monkeypatch.setattr(ck.CDPConnection, "connect", AsyncMock(return_value=kiosk.conn))
+    monkeypatch.setattr(ck.CDPConnection, "connect_browser", AsyncMock())
+    monkeypatch.setattr(ck.ChromiumKiosk, "get_gpu_info", AsyncMock(return_value=None))
+
+    asyncio.run(kiosk._connect_cdp())
+
+    sources = [c.args[1]["source"] for c in kiosk.conn.send.await_args_list
+               if c.args[0] == "Page.addScriptToEvaluateOnNewDocument"]
+    assert all("vs-satellite-entity" not in s for s in sources)
