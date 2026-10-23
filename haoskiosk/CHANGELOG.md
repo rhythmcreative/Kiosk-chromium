@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.0 - Official Release
+
+- **First Official Stable Release of Kiosk-chromium.**
+- Complete standalone Chromium kiosk for Home Assistant:
+  - Chromium driven via Chrome DevTools Protocol (CDP) replacing legacy Luakit.
+  - WebGPU & WebGL hardware acceleration enabled for modern dashboards and Voice Satellite integration.
+  - Automatic HA login, dark/light theme enforcement, sidebar control, and customizable zoom.
+  - Touchscreen gestures and onscreen keyboard support (Onboard).
+  - Built-in REST API for display control (`/display`, `/url`, `/refresh`, `/health`).
+  - Automatic periodic refresh, DPMS screen blanking, and crash recovery.
+  - Multi-arch Docker images (`amd64`, `aarch64`) for Home Assistant OS.
+
+
 ## v1.4.32 - August 2026
 
 - **Improvement: `voice_satellite_entity` accepts what HA's own pickers show.** Instead of

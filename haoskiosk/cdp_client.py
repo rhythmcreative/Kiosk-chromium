@@ -1,7 +1,7 @@
 """-------------------------------------------------------------------------------
 # Add-on: HAOS Kiosk Display (haoskiosk)
 # File: cdp_client.py
-# Version: 1.4.26
+# Version: 1.0.0
 # Copyright Jeff Kosowsky
 # Date: August 2026
 

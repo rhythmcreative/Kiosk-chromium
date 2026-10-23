@@ -3,7 +3,7 @@
 Display HA dashboards in kiosk mode on your HAOS server, using a regular
 Chromium browser.
 
-**Maintainer:** rhythmcreative · **Version:** 1.4.25 (August 2026) · Fork of
+**Maintainer:** rhythmcreative · **Version:** 1.0.0 · Fork of
 [HAOS-kiosk](https://github.com/puterboy/HAOS-kiosk) by Jeff Kosowsky,
 driving Chromium via CDP instead of Luakit. See the
 [CHANGELOG](CHANGELOG.md).
